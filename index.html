@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Travel Map</title>
+  <meta name="description" content="Mark the cities you've visited and see your travel stats.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌍</text></svg>">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="brand">Travel Map</h1>
+    <div class="filter" id="filter">
+      <label for="yearFrom" class="sr-only">From year</label>
+      <select id="yearFrom" aria-label="From year"></select>
+      <span class="muted">to</span>
+      <label for="yearTo" class="sr-only">To year</label>
+      <select id="yearTo" aria-label="To year"></select>
+    </div>
+    <div class="actions">
+      <button class="btn primary edit-only" id="addBtn" type="button">+ Add visit</button>
+      <div class="menu edit-only">
+        <button class="btn" id="menuBtn" type="button" aria-haspopup="true" aria-expanded="false" aria-label="More options">⋯</button>
+        <div class="menu-list" id="menuList" role="menu" hidden>
+          <button type="button" role="menuitem" data-action="home">Set home city</button>
+          <button type="button" role="menuitem" data-action="share">Share my map</button>
+          <button type="button" role="menuitem" data-action="backup">Download backup</button>
+          <button type="button" role="menuitem" data-action="restore">Restore from backup</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="shared-banner" id="sharedBanner" hidden>
+    You're viewing someone's shared travel map (read-only).
+    <a href="./" id="ownMapLink">Open my own map</a>
+  </div>
+
+  <main class="layout">
+    <section class="map-wrap">
+      <div id="map" aria-label="World map of visited places"></div>
+      <div class="map-hint edit-only" id="mapHint">Tip: click anywhere on the map to add the nearest city</div>
+      <div class="loading" id="loading">Loading map…</div>
+    </section>
+
+    <aside class="panel">
+      <nav class="tabs" role="tablist">
+        <button type="button" role="tab" class="tab active" data-tab="stats" aria-selected="true">Stats</button>
+        <button type="button" role="tab" class="tab" data-tab="visits" aria-selected="false">Visits <span id="visitCount" class="pill">0</span></button>
+      </nav>
+      <div class="tab-body" id="tab-stats"></div>
+      <div class="tab-body" id="tab-visits" hidden></div>
+    </aside>
+  </main>
+
+  <!-- Add / edit visit dialog -->
+  <dialog id="visitDialog">
+    <form method="dialog" id="visitForm" autocomplete="off">
+      <h2 id="visitTitle">Add a visit</h2>
+      <label class="field">
+        <span>City</span>
+        <div class="combo">
+          <input id="cityInput" type="text" placeholder="Start typing a city…" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="cityList" required>
+          <ul id="cityList" class="suggest" role="listbox" hidden></ul>
+        </div>
+      </label>
+      <div class="row">
+        <label class="field">
+          <span>Month</span>
+          <select id="monthInput"></select>
+        </label>
+        <label class="field">
+          <span>Year</span>
+          <select id="yearInput"></select>
+        </label>
+      </div>
+      <p class="error" id="visitError" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn danger" id="deleteVisitBtn" hidden>Delete</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" value="cancel" id="cancelVisitBtn">Cancel</button>
+        <button type="submit" class="btn primary" id="saveVisitBtn">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Home city dialog -->
+  <dialog id="homeDialog">
+    <form method="dialog" id="homeForm" autocomplete="off">
+      <h2>Home city</h2>
+      <p class="muted">Used for distance stats like "farthest from home".</p>
+      <label class="field">
+        <span>City</span>
+        <div class="combo">
+          <input id="homeInput" type="text" placeholder="Start typing a city…" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="homeList">
+          <ul id="homeList" class="suggest" role="listbox" hidden></ul>
+        </div>
+      </label>
+      <div class="dialog-actions">
+        <button type="button" class="btn danger" id="clearHomeBtn">Clear</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="cancelHomeBtn">Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Share dialog -->
+  <dialog id="shareDialog">
+    <form method="dialog">
+      <h2>Share your map</h2>
+      <p class="muted">Anyone with this link sees your map and stats (read-only). Your trips are stored inside the link itself, so share it with people you trust. It's a snapshot: add new trips later and you'll need a fresh link.</p>
+      <textarea id="shareUrl" readonly rows="4"></textarea>
+      <div class="dialog-actions">
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="closeShareBtn">Close</button>
+        <button type="button" class="btn primary" id="copyShareBtn">Copy link</button>
+      </div>
+    </form>
+  </dialog>
+
+  <input type="file" id="restoreInput" accept=".json,application/json" hidden>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
