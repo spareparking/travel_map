@@ -1,4 +1,4 @@
-import { computeStats, CONTINENTS, MONTHS, formatWhen, formatYears, visitKey, WORLD_COUNTRIES } from './stats.js';
+import { computeStats, CONTINENTS, MONTHS, formatWhen, formatYears, visitKey, distanceKm, WORLD_COUNTRIES } from './stats.js';
 import { encodeShare, decodeShare } from './share.js';
 
 const STORAGE_KEY = 'travelmap.v1';
@@ -26,18 +26,79 @@ function load() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const d = JSON.parse(raw);
-      if (d && Array.isArray(d.visits)) data = { homes: migrateHomes(d), visits: d.visits };
+      if (d && Array.isArray(d.visits)) {
+        addPlaces(d.places);
+        data = { homes: migrateHomes(d), visits: d.visits };
+      }
     }
   } catch { /* storage unavailable: start empty */ }
 }
 function save() {
   if (readOnly) return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, ...data }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, ...data, places: usedPlaces() }));
   } catch {
     toast("Couldn't save in this browser. Download a backup to keep your data.");
   }
 }
+// ---------- Places added from the online search ----------
+// They live alongside the built-in cities (same shape) but are saved with your data,
+// since they aren't in the built-in list. IDs start at 3,000,000,000 to never clash with GeoNames ids.
+const customPlaces = new Map();
+
+function addPlace(p) {
+  if (!p || cityById.has(+p.id)) return cityById.get(+p.id);
+  const place = {
+    id: +p.id, name: String(p.name), admin: String(p.admin || ''), cc: String(p.cc).toUpperCase(),
+    lat: +p.lat, lon: +p.lon, pop: 0, norm: norm(String(p.name)), custom: true,
+  };
+  cities.push(place);
+  cityById.set(place.id, place);
+  customPlaces.set(place.id, place);
+  return place;
+}
+function addPlaces(list) { if (Array.isArray(list)) list.forEach(addPlace); }
+
+/** Turn an online search result into a place we can use, reusing a known one if it's the same spot. */
+function registerOnlinePlace(r) {
+  const n = norm(r.name);
+  const same = cities.find((c) => c.norm === n && c.cc === r.cc && distanceKm(c, r) < 10);
+  if (same) return same;
+  let id;
+  do { id = 3000000000 + Math.floor(Math.random() * 1000000000); } while (cityById.has(id));
+  return addPlace({ ...r, id, lat: Math.round(r.lat * 1e5) / 1e5, lon: Math.round(r.lon * 1e5) / 1e5 });
+}
+
+/** Online-added places that a visit or home still uses (unused ones are dropped on save). */
+function usedPlaces() {
+  const used = new Set([...data.visits.map((v) => v.cityId), ...data.homes.map((h) => h.cityId)]);
+  return [...customPlaces.values()].filter((p) => used.has(p.id))
+    .map(({ id, name, admin, cc, lat, lon }) => ({ id, name, admin, cc, lat, lon }));
+}
+
+async function searchOnline(q) {
+  const params = new URLSearchParams({ q, format: 'jsonv2', addressdetails: '1', limit: '8', 'accept-language': 'en' });
+  const res = await fetch(`https://nominatim.openstreetmap.org/search?${params}`);
+  if (!res.ok) throw new Error(`Search failed (${res.status})`);
+  const seen = new Set();
+  return (await res.json())
+    .filter((x) => x.address && x.address.country_code)
+    .map((x) => {
+      const a = x.address;
+      return {
+        name: x.name || x.display_name.split(',')[0],
+        admin: a.state || a.province || a.region || a.state_district || a.county || '',
+        cc: a.country_code.toUpperCase(), lat: +x.lat, lon: +x.lon, online: true,
+      };
+    })
+    .filter((r) => {
+      const k = `${r.name}|${r.admin}|${r.cc}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+}
+
 /** Older saves had a single `home` city id; newer ones have a `homes` list. */
 function migrateHomes(d) {
   if (Array.isArray(d.homes)) return d.homes;
@@ -98,46 +159,89 @@ function nearestCity(lat, lon) {
   return best;
 }
 
-/** Wire an input + list into a city autocomplete. Returns {get, set}. */
+/**
+ * Wire an input + list into a city autocomplete. Returns {get, set}.
+ * Built-in cities are searched as you type; the last row offers an online search (OpenStreetMap)
+ * for places that aren't in the built-in list. Nothing goes online unless that row is chosen.
+ */
 function cityCombo(input, list, onPick) {
-  let selected = null, items = [], active = -1;
+  let selected = null, items = [], extra = null, active = -1, searchSeq = 0;
+  const total = () => items.length + (extra && extra.type === 'online' ? 1 : 0);
   const close = () => { list.hidden = true; input.setAttribute('aria-expanded', 'false'); active = -1; };
+  const sub = (c) => esc([c.admin !== c.name ? c.admin : '', countryName(c.cc)].filter(Boolean).join(', '));
   const render = () => {
-    list.innerHTML = items.map((c, i) =>
+    let html = items.map((c, i) =>
       `<li role="option" id="${list.id}-${i}" data-i="${i}" class="${i === active ? 'active' : ''}" aria-selected="${i === active}">
-        <strong>${esc(c.name)}</strong> <span class="muted">${esc([c.admin !== c.name ? c.admin : '', countryName(c.cc)].filter(Boolean).join(', '))}</span></li>`).join('');
-    list.hidden = !items.length;
-    input.setAttribute('aria-expanded', String(!!items.length));
+        <strong>${esc(c.name)}</strong> <span class="muted">${sub(c)}</span>${c.online ? '<span class="tag">OpenStreetMap</span>' : ''}</li>`).join('');
+    if (extra && extra.type === 'online') {
+      const i = items.length;
+      html += `<li role="option" id="${list.id}-${i}" data-i="${i}" class="online-row ${i === active ? 'active' : ''}" aria-selected="${i === active}">
+        Not listed? <strong>Search online</strong> for “${esc(extra.q)}”</li>`;
+    } else if (extra && extra.type === 'status') {
+      html += `<li class="status" aria-live="polite">${esc(extra.text)}</li>`;
+    }
+    list.innerHTML = html;
+    const open = !!html;
+    list.hidden = !open;
+    input.setAttribute('aria-expanded', String(open));
     if (active >= 0) input.setAttribute('aria-activedescendant', `${list.id}-${active}`);
     else input.removeAttribute('aria-activedescendant');
   };
   const pick = (c) => {
+    if (c.online) c = registerOnlinePlace(c);
     selected = c;
     input.value = cityLabelLong(c);
     close();
     onPick && onPick(c);
   };
+  const runOnline = async (q) => {
+    const seq = ++searchSeq;
+    items = [];
+    extra = { type: 'status', text: 'Searching OpenStreetMap…' };
+    active = -1;
+    render();
+    try {
+      const results = await searchOnline(q);
+      if (seq !== searchSeq) return; // the user has typed something else since
+      items = results;
+      extra = results.length ? null : { type: 'status', text: `Nothing found online for “${q}”. Try adding the country, e.g. “${q}, Italy”.` };
+      active = results.length ? 0 : -1;
+    } catch {
+      if (seq !== searchSeq) return;
+      extra = { type: 'status', text: "Couldn't reach the online search. Check your internet connection and try again." };
+    }
+    render();
+  };
+  const activate = (i) => {
+    if (i < items.length) pick(items[i]);
+    else if (extra && extra.type === 'online') runOnline(extra.q);
+  };
   input.addEventListener('input', () => {
     selected = null;
-    items = searchCities(input.value);
-    active = items.length ? 0 : -1;
+    searchSeq++;
+    const q = input.value.trim();
+    items = searchCities(q);
+    extra = q.length >= 2 ? { type: 'online', q } : null;
+    active = total() ? 0 : -1;
     render();
   });
   input.addEventListener('keydown', (e) => {
     if (list.hidden) return;
-    if (e.key === 'ArrowDown') { active = (active + 1) % items.length; render(); e.preventDefault(); }
-    else if (e.key === 'ArrowUp') { active = (active - 1 + items.length) % items.length; render(); e.preventDefault(); }
-    else if (e.key === 'Enter' && active >= 0) { pick(items[active]); e.preventDefault(); }
+    const n = total();
+    if (e.key === 'ArrowDown' && n) { active = (active + 1) % n; render(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp' && n) { active = (active - 1 + n) % n; render(); e.preventDefault(); }
+    else if (e.key === 'Enter' && active >= 0) { activate(active); e.preventDefault(); }
     else if (e.key === 'Escape') { close(); e.preventDefault(); e.stopPropagation(); }
   });
   list.addEventListener('mousedown', (e) => {
-    const li = e.target.closest('li');
-    if (li) { e.preventDefault(); pick(items[+li.dataset.i]); }
+    const li = e.target.closest('li[data-i]');
+    e.preventDefault(); // keep focus in the input
+    if (li) activate(+li.dataset.i);
   });
   input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input) close(); }, 100));
   return {
     get: () => selected,
-    set: (c) => { selected = c; input.value = c ? cityLabelLong(c) : ''; items = []; close(); },
+    set: (c) => { selected = c; input.value = c ? cityLabelLong(c) : ''; items = []; extra = null; searchSeq++; close(); },
   };
 }
 
@@ -147,7 +251,7 @@ const ACCENT = getComputedStyle(document.documentElement).getPropertyValue('--ac
 function initMap() {
   map = L.map('map', { worldCopyJump: true, minZoom: 1, maxZoom: 8, zoomSnap: 0.5, zoomControl: true }).setView([25, 10], 2);
   map.attributionControl.setPrefix(false);
-  map.attributionControl.addAttribution('Map: <a href="https://www.naturalearthdata.com/">Natural Earth</a> · Cities: <a href="https://www.geonames.org/">GeoNames</a> · <a href="https://leafletjs.com">Leaflet</a>');
+  map.attributionControl.addAttribution('Map: <a href="https://www.naturalearthdata.com/">Natural Earth</a> · Cities: <a href="https://www.geonames.org/">GeoNames</a>, <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap</a> · <a href="https://leafletjs.com">Leaflet</a>');
   pinLayer = L.layerGroup();
   homeLayer = L.layerGroup().addTo(map);
   map.on('click', (e) => {
@@ -580,7 +684,8 @@ function deleteHome(id) {
 // ---------- Backup / restore / share ----------
 function downloadBackup() {
   const payload = {
-    app: 'travel-map', version: 2, exportedAt: new Date().toISOString(),
+    app: 'travel-map', version: 3, exportedAt: new Date().toISOString(),
+    places: usedPlaces(),
     homes: resolvedHomes().map((h) => ({ cityId: h.cityId, city: cityLabel(h.city), from: h.from, to: h.to })),
     visits: [...data.visits].sort((a, b) => visitKey(a) - visitKey(b)).map((v) => {
       const c = cityById.get(v.cityId);
@@ -602,6 +707,7 @@ async function restoreBackup(file) {
   try {
     const d = JSON.parse(await file.text());
     if (d.app !== 'travel-map' || !Array.isArray(d.visits)) throw new Error('not a backup');
+    addPlaces(d.places);
     const visits = d.visits
       .filter((v) => cityById.has(+v.cityId) && Number.isInteger(+v.year))
       .map((v) => ({ id: newId(), cityId: +v.cityId, y: +v.year, m: +v.month || 0 }));
@@ -627,7 +733,7 @@ async function restoreBackup(file) {
 
 async function openShare() {
   if (!data.visits.length) { toast('Add some visits first.'); return; }
-  const code = await encodeShare(data);
+  const code = await encodeShare(data, usedPlaces());
   const url = `${location.origin}${location.pathname}#s=${code}`;
   $('shareUrl').value = url;
   $('shareDialog').showModal();
@@ -739,7 +845,9 @@ async function boot() {
   const m = location.hash.match(/^#s=(.+)$/);
   if (m) {
     try {
-      data = await decodeShare(m[1]);
+      const shared = await decodeShare(m[1]);
+      addPlaces(shared.places);
+      data = { homes: shared.homes, visits: shared.visits };
       readOnly = true;
       document.body.classList.add('readonly');
       $('sharedBanner').hidden = false;

@@ -6,6 +6,7 @@ A lean, single-page web app for marking the cities you've visited (with month an
 
 - **Map:** flat world map; visited countries shaded, a pin per city (bigger pin = more visits). Your current home is a solid ⌂; past homes are lighter outlined ⌂ markers.
 - **Add visits:** search by city name (about 34,000 cities with population over 15,000), or click the map to pick the nearest city. Each visit is stored separately, so return trips count.
+- **Places not in the built-in list:** the last suggestion is always *"Not listed? Search online"*, which looks the place up on [OpenStreetMap](https://www.openstreetmap.org/) (via the free Nominatim service). Nothing is sent online unless you choose that row. Places you pick are saved with your data, included in backups and share links, and show up in future searches without going online.
 - **Stats:** countries, cities and continents, % of the world's 195 countries, visits per year chart, busiest year, first and latest trip, farthest north/south/east/west, farthest from home, total round-trip distance, your homes, and most-visited cities and countries.
 - **Home cities:** **⋯ → Home cities** lets you list every place you've lived with the years you lived there. Only one can be current; adding a new current home moves the old one to your past homes. Distance stats measure each trip from the home you had that year, and visits to the city you lived in at the time don't count as trips.
 - **Time filter:** limit the map and stats to a year or a range of years.
@@ -43,5 +44,6 @@ scripts/build_data.py  regenerates data/ from the original sources
 ## Data sources
 
 - Cities: [GeoNames](https://www.geonames.org/) `cities15000` (CC BY 4.0)
+- Online place search: [Nominatim](https://nominatim.org/) / © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors (ODbL)
 - Country outlines: [Natural Earth](https://www.naturalearthdata.com/) 1:50m admin-0 countries (public domain)
 - Map library: [Leaflet](https://leafletjs.com/) (BSD-2-Clause)

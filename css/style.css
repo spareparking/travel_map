@@ -273,3 +273,12 @@ dialog.wide { width: min(520px, calc(100vw - 32px)); }
 .dialog-pad { padding: 20px 20px 4px; }
 dialog form.home-form { border-top: 1px solid var(--line); background: var(--bg); border-radius: 0 0 14px 14px; padding: 16px 20px 20px; }
 .home-form h3 { font-size: 14px; margin-bottom: 10px; }
+
+/* ---------- Online search rows ---------- */
+.suggest li.online-row { color: var(--ink-2); border-top: 1px solid var(--line); border-radius: 0 0 6px 6px; margin-top: 2px; }
+.suggest li.online-row strong { color: var(--accent); font-weight: 600; }
+.suggest li.status { cursor: default; color: var(--muted); font-size: 14px; }
+.suggest li.status:hover { background: none; }
+.suggest .tag {
+  float: right; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; margin-top: 2px;
+}
