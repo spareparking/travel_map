@@ -11,7 +11,10 @@
 </head>
 <body>
   <header class="topbar">
-    <h1 class="brand">Travel Map</h1>
+    <div class="brand-wrap">
+      <h1 class="brand">Travel Map</h1>
+      <span class="cloud-status edit-only" id="cloudStatus" hidden></span>
+    </div>
     <div class="filter" id="filter">
       <label for="yearFrom" class="sr-only">From year</label>
       <select id="yearFrom" aria-label="From year"></select>
@@ -24,14 +27,25 @@
       <div class="menu edit-only">
         <button class="btn" id="menuBtn" type="button" aria-haspopup="true" aria-expanded="false" aria-label="More options">⋯</button>
         <div class="menu-list" id="menuList" role="menu" hidden>
+          <div class="menu-account" id="menuAccount" hidden></div>
+          <button type="button" role="menuitem" data-action="signin" id="menuSignIn" hidden>Sign in with Google</button>
           <button type="button" role="menuitem" data-action="home">Home cities</button>
           <button type="button" role="menuitem" data-action="share">Share my map</button>
           <button type="button" role="menuitem" data-action="backup">Download backup</button>
           <button type="button" role="menuitem" data-action="restore">Restore from backup</button>
+          <button type="button" role="menuitem" data-action="signout" id="menuSignOut" hidden>Sign out</button>
         </div>
       </div>
     </div>
   </header>
+
+  <div class="cloud-banner edit-only" id="cloudBanner" hidden>
+    <span>Your trips are only saved in this browser.</span>
+    <span class="cloud-banner-actions">
+      <button type="button" class="btn small primary" id="cloudSignInBtn">Sign in with Google</button>
+      <button type="button" class="link" id="cloudLaterBtn">Not now</button>
+    </span>
+  </div>
 
   <div class="shared-banner" id="sharedBanner" hidden>
     You're viewing someone's shared travel map (read-only).

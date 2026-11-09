@@ -1,7 +1,10 @@
 import { computeStats, CONTINENTS, MONTHS, formatWhen, formatYears, visitKey, distanceKm, WORLD_COUNTRIES } from './stats.js';
 import { encodeShare, decodeShare } from './share.js';
+import { initCloud } from './cloud.js';
+import { firebaseConfig } from './firebase-config.js';
 
 const STORAGE_KEY = 'travelmap.v1';
+const DIRTY_KEY = 'travelmap.dirty'; // '0' = this device's data is safely in the cloud
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmtNum = (n) => Math.round(n).toLocaleString();
@@ -33,12 +36,149 @@ function load() {
     }
   } catch { /* storage unavailable: start empty */ }
 }
-function save() {
-  if (readOnly) return;
+function writeLocal() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, ...data, places: usedPlaces() }));
+    return true;
   } catch {
-    toast("Couldn't save in this browser. Download a backup to keep your data.");
+    return false;
+  }
+}
+function setDirty(dirty) { try { localStorage.setItem(DIRTY_KEY, dirty ? '1' : '0'); } catch { /* ignore */ } }
+function isDirty() { try { return localStorage.getItem(DIRTY_KEY) !== '0'; } catch { return true; } }
+
+/** Save a change: to this browser, and to the cloud when signed in. */
+function save() {
+  if (readOnly) return;
+  const ok = writeLocal();
+  setDirty(true);
+  changeCount++;
+  if (cloudUser) schedulePush();
+  else if (!ok) toast("Couldn't save in this browser. Sign in with Google or download a backup to keep your data.");
+}
+
+// ---------- Cloud save ----------
+let cloud = null;      // set when Firebase is configured
+let cloudUser = null;  // {uid, email, name} when signed in
+let changeCount = 0;
+let pushTimer = null;
+
+const cloudPayload = () => ({ version: 2, homes: data.homes, visits: data.visits, places: usedPlaces() });
+
+function schedulePush() {
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(pushNow, 400);
+}
+async function pushNow() {
+  clearTimeout(pushTimer);
+  pushTimer = null;
+  if (!cloud || !cloudUser) return;
+  const at = changeCount;
+  const ok = await cloud.push(cloudPayload());
+  if (ok && at === changeCount) setDirty(false); // nothing changed while it was saving
+}
+
+/** Use the cloud copy on this device. */
+function applyRemote(remote) {
+  addPlaces(remote.places);
+  const next = { homes: Array.isArray(remote.homes) ? remote.homes : [], visits: Array.isArray(remote.visits) ? remote.visits : [] };
+  const same = JSON.stringify(next) === JSON.stringify(data);
+  data = next;
+  writeLocal();
+  setDirty(false);
+  if (!same) renderAll();
+}
+
+/** Combine two data sets without losing anything (same place + date counts once). */
+function mergeData(a, b) {
+  const visits = new Map(), homes = new Map();
+  for (const v of [...a.visits, ...(b.visits || [])]) {
+    const k = `${v.cityId}|${v.y}|${v.m || 0}`;
+    if (!visits.has(k)) visits.set(k, v);
+  }
+  for (const h of [...a.homes, ...(b.homes || [])]) {
+    const k = `${h.cityId}|${h.from}|${h.to}`;
+    if (!homes.has(k)) homes.set(k, h);
+  }
+  return { homes: [...homes.values()], visits: [...visits.values()] };
+}
+
+function onRemote(remote, { first }) {
+  const hasLocal = data.visits.length > 0 || data.homes.length > 0;
+  if (first) {
+    if (!remote) {
+      // Nothing in the cloud yet: upload what's on this device
+      if (hasLocal) pushNow(); else setCloudStatus('saved');
+      return;
+    }
+    if (!hasLocal || !isDirty()) { applyRemote(remote); setCloudStatus('saved'); return; }
+    // This device has changes the cloud hasn't seen: combine both, then save the result everywhere
+    addPlaces(remote.places);
+    const before = data.visits.length + data.homes.length;
+    data = mergeData(data, remote);
+    writeLocal();
+    renderAll();
+    pushNow();
+    const added = data.visits.length + data.homes.length - before;
+    toast(added ? `Combined this device's trips with your cloud save (${added} added here).` : 'Your trips are now saved to the cloud.');
+    return;
+  }
+  // A change from another device. If this device has unsaved changes, ours win (they're about to upload).
+  if (remote && !isDirty() && !pushTimer) { applyRemote(remote); setCloudStatus('saved'); }
+}
+
+const STATUS_TEXT = {
+  syncing: ['Syncing…', 'Getting your trips from the cloud'],
+  saving: ['Saving…', 'Saving to the cloud'],
+  saved: ['☁ Saved', 'Your trips are saved to the cloud'],
+  offline: ['Offline · will sync', "You're offline. Changes are kept on this device and saved to the cloud when you're back online."],
+  error: ['⚠ Not synced', "Couldn't save to the cloud. Your trips are still on this device; it will try again on your next change."],
+};
+function setCloudStatus(state) {
+  const el = $('cloudStatus');
+  if (!cloudUser || !STATUS_TEXT[state]) { el.hidden = true; return; }
+  const [text, title] = STATUS_TEXT[state];
+  el.textContent = text;
+  el.title = title;
+  el.dataset.state = state;
+  el.hidden = false;
+}
+
+function onCloudUser(u) {
+  cloudUser = u;
+  $('menuAccount').hidden = !u;
+  $('menuAccount').textContent = u ? `Signed in as ${u.email || u.name || 'you'}` : '';
+  $('menuSignOut').hidden = !u;
+  $('menuSignIn').hidden = !!u;
+  let dismissed = false;
+  try { dismissed = sessionStorage.getItem('travelmap.cloudBannerHidden') === '1'; } catch { /* ignore */ }
+  $('cloudBanner').hidden = !!u || dismissed;
+  setCloudStatus(u ? 'syncing' : null);
+}
+
+async function signIn() {
+  try {
+    await cloud.signIn();
+  } catch (err) {
+    const code = err && err.code;
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') return;
+    if (code === 'auth/unauthorized-domain') toast("This web address isn't allowed yet. Add it in Firebase → Authentication → Settings → Authorized domains.");
+    else toast(`Sign-in didn't work (${code || 'unknown error'}). Please try again.`);
+    console.error(err);
+  }
+}
+async function signOutCloud() {
+  if (!confirm("Sign out? Your trips stay on this device, but new changes won't be saved to the cloud until you sign in again.")) return;
+  if (pushTimer) await pushNow();
+  await cloud.signOut();
+  toast('Signed out');
+}
+
+async function startCloud() {
+  try {
+    cloud = await initCloud(firebaseConfig, { onUser: onCloudUser, onRemote, onStatus: setCloudStatus });
+  } catch (err) {
+    console.error('Cloud save unavailable', err); // e.g. offline on first load; the app still works locally
   }
 }
 // ---------- Places added from the online search ----------
@@ -747,7 +887,7 @@ async function restoreBackup(file) {
     const msg = data.visits.length
       ? `Replace your current ${data.visits.length} visits with the ${visits.length} in this backup?`
       : `Load ${visits.length} visits from this backup?`;
-    if (!confirm(msg)) return;
+    if (!confirm(cloudUser ? `${msg} This also replaces your cloud save.` : msg)) return;
     const homes = Array.isArray(d.homes)
       ? d.homes.filter((h) => cityById.has(+h.cityId)).map((h) => ({
         id: newId(), cityId: +h.cityId, from: Number.isInteger(h.from) ? h.from : null, to: Number.isInteger(h.to) ? h.to : null,
@@ -825,8 +965,16 @@ function wireUi() {
     const a = e.target.closest('[data-action]');
     if (!a) return;
     setMenu(false);
-    ({ home: openHomeDialog, share: openShare, backup: downloadBackup, restore: () => $('restoreInput').click() })[a.dataset.action]();
+    ({ home: openHomeDialog, share: openShare, backup: downloadBackup, restore: () => $('restoreInput').click(), signin: signIn, signout: signOutCloud })[a.dataset.action]();
   });
+
+  // Cloud banner
+  $('cloudSignInBtn').addEventListener('click', signIn);
+  $('cloudLaterBtn').addEventListener('click', () => {
+    $('cloudBanner').hidden = true;
+    try { sessionStorage.setItem('travelmap.cloudBannerHidden', '1'); } catch { /* ignore */ }
+  });
+  window.addEventListener('online', () => { if (cloudUser && isDirty()) pushNow(); });
 
   $('yearFrom').addEventListener('change', onFilterChange);
   $('yearTo').addEventListener('change', onFilterChange);
@@ -898,6 +1046,12 @@ async function boot() {
   renderAll();
   fitToVisits();
   $('loading').hidden = true;
+
+  if (!readOnly) {
+    // Ask the browser not to auto-delete this site's data (best effort; no prompt in most browsers)
+    try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch { /* ignore */ }
+    startCloud();
+  }
 }
 
 window.addEventListener('hashchange', () => location.reload());
