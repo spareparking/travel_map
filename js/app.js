@@ -537,8 +537,8 @@ function showTempMarker(c) {
 function clearTempMarker() { if (tempMarker) { tempMarker.remove(); tempMarker = null; } }
 
 // ---------- Stats panel ----------
-function tile(value, label, sub = '') {
-  return `<div class="tile"><div class="tile-value">${value}</div><div class="tile-label">${label}</div>${sub ? `<div class="tile-sub">${sub}</div>` : ''}</div>`;
+function tile(value, label, sub = '', title = '') {
+  return `<div class="tile"${title ? ` title="${esc(title)}"` : ''}><div class="tile-value">${value}</div><div class="tile-label">${label}</div>${sub ? `<div class="tile-sub">${sub}</div>` : ''}</div>`;
 }
 const placeLine = (c) => `${esc(c.name)} <span class="muted">${esc(countryName(c.cc))}</span>`;
 
@@ -547,18 +547,18 @@ function yearChart(years) {
   const min = years[0].year, max = years[years.length - 1].year;
   const byYear = new Map(years.map((y) => [y.year, y]));
   const all = [];
-  for (let y = min; y <= max; y++) all.push(byYear.get(y) || { year: y, visits: 0, newCities: 0, newCountries: 0 });
-  const peak = Math.max(...all.map((y) => y.visits));
+  for (let y = min; y <= max; y++) all.push(byYear.get(y) || { year: y, trips: 0, newCities: 0, newCountries: 0 });
+  const peak = Math.max(...all.map((y) => y.trips));
   const step = Math.ceil(all.length / 8);
   const bars = all.map((y, i) => {
-    const h = y.visits ? Math.max(4, (y.visits / peak) * 100) : 0;
-    const tip = `${y.year}: ${y.visits} visit${y.visits === 1 ? '' : 's'} · ${y.newCities} new cit${y.newCities === 1 ? 'y' : 'ies'} · ${y.newCountries} new countr${y.newCountries === 1 ? 'y' : 'ies'}`;
+    const h = y.trips ? Math.max(4, (y.trips / peak) * 100) : 0;
+    const tip = `${y.year}: ${y.trips} trip${y.trips === 1 ? '' : 's'} · ${y.newCities} new cit${y.newCities === 1 ? 'y' : 'ies'} · ${y.newCountries} new countr${y.newCountries === 1 ? 'y' : 'ies'}`;
     const showLabel = i % step === 0 || i === all.length - 1;
     return `<div class="bar-col" tabindex="0" data-tip="${esc(tip)}" aria-label="${esc(tip)}">
       <div class="bar-area"><div class="bar" style="height:${h}%"></div></div>
       <div class="bar-label">${showLabel ? `’${String(y.year).slice(2)}` : ''}</div></div>`;
   }).join('');
-  return `<div class="chart" role="img" aria-label="Visits per year">
+  return `<div class="chart" role="img" aria-label="Trips per year">
       <div class="chart-peak muted">${peak}</div>
       <div class="bars">${bars}</div>
       <div class="chart-tip" hidden></div>
@@ -588,7 +588,7 @@ function renderStats(visits) {
         ${tile(s.countries, `countr${s.countries === 1 ? 'y' : 'ies'}`, `${s.worldPct.toFixed(1)}% of ${WORLD_COUNTRIES}`)}
         ${tile(s.cities, `cit${s.cities === 1 ? 'y' : 'ies'}`, s.returnCities ? `${s.returnCities} visited more than once` : '')}
         ${tile(`${s.continents.length}<span class="of">/7</span>`, 'continents', esc(contNames))}
-        ${tile(s.visits, `visit${s.visits === 1 ? '' : 's'}`, '')}
+        ${tile(s.trips, `trip${s.trips === 1 ? '' : 's'}`, s.trips !== s.visits ? `${s.visits} city visits` : '', 'Cities in the same country and month while abroad count as one trip')}
       </div>
       <div class="progress" aria-label="${s.worldPct.toFixed(1)}% of the world's countries visited"><div style="width:${Math.min(100, s.worldPct)}%"></div></div>
     </section>
@@ -606,10 +606,10 @@ function renderStats(visits) {
 
     <section class="block">
       <h3>Over time</h3>
-      <p class="chart-title muted">Visits per year · hover a bar for new places</p>
+      <p class="chart-title muted">Trips per year · hover a bar for details</p>
       ${yearChart(s.years)}
       <dl class="facts">
-        <div><dt>Busiest year</dt><dd>${s.busiest.year} <span class="muted">(${s.busiest.visits} visit${s.busiest.visits === 1 ? '' : 's'})</span></dd></div>
+        <div><dt>Busiest year</dt><dd>${s.busiest.year} <span class="muted">(${s.busiest.trips} trip${s.busiest.trips === 1 ? '' : 's'})</span></dd></div>
         <div><dt>First trip</dt><dd>${placeLine(s.first.city)} <span class="muted">· ${formatWhen(s.first)}</span></dd></div>
         <div><dt>Latest trip</dt><dd>${placeLine(s.latest.city)} <span class="muted">· ${formatWhen(s.latest)}</span></dd></div>
         <div><dt>New cities</dt><dd>${newInRange} <span class="muted">first-time visits${filter.from || filter.to ? ' in this range' : ''}</span></dd></div>
@@ -653,7 +653,7 @@ function renderStats(visits) {
         <div>
           <h4>Most-visited countries</h4>
           ${s.topCountries.length
-            ? `<ol class="rank">${s.topCountries.map((c) => `<li><span>${esc(countryName(c.cc))}</span><span class="muted" title="${c.visits} visits, ${c.cities} cities">${c.visits}× · ${c.cities} cit${c.cities === 1 ? 'y' : 'ies'}</span></li>`).join('')}</ol>`
+            ? `<ol class="rank">${s.topCountries.map((c) => `<li><span>${esc(countryName(c.cc))}</span><span class="muted" title="${c.visits} trip${c.visits === 1 ? '' : 's'}, ${c.cities} cit${c.cities === 1 ? 'y' : 'ies'}">${c.visits} trip${c.visits === 1 ? '' : 's'} · ${c.cities} cit${c.cities === 1 ? 'y' : 'ies'}</span></li>`).join('')}</ol>`
             : '<p class="muted rank-empty">No trips abroad in this range yet.</p>'}
           ${s.topCountriesAbroadOnly ? '<p class="muted rank-note">Not counting the country you lived in at the time.</p>' : ''}
         </div>
