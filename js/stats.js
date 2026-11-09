@@ -8,6 +8,29 @@ export const CONTINENTS = {
   NA: 'North America', OC: 'Oceania', SA: 'South America',
 };
 
+export const US_STATES = [
+  'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware', 'Florida', 'Georgia',
+  'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland',
+  'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey',
+  'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina',
+  'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming',
+];
+const US_STATE_LOOKUP = new Map(US_STATES.map((n) => [n.toLowerCase(), n]));
+
+/** US states (of 50) visited, plus whether Washington, D.C. was visited. Uses each place's state/region name. */
+export function usStatesVisited(visits) {
+  const states = new Set();
+  let dc = false;
+  for (const v of visits) {
+    if (v.city.cc !== 'US') continue;
+    const admin = (v.city.admin || '').trim().toLowerCase();
+    if (admin === 'district of columbia' || admin === 'washington, d.c.') dc = true;
+    else if (US_STATE_LOOKUP.has(admin)) states.add(US_STATE_LOOKUP.get(admin));
+  }
+  const visited = [...states].sort();
+  return { visited, missing: US_STATES.filter((n) => !states.has(n)), dc, any: visits.some((v) => v.city.cc === 'US') };
+}
+
 export const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /** Great-circle distance in km between two {lat, lon} points. */
@@ -157,5 +180,6 @@ export function computeStats(visits, allVisits, ctx) {
     topCities,
     topCountries,
     returnCities: [...cityMap.values()].filter((e) => e.count > 1).length,
+    us: usStatesVisited(visits),
   };
 }

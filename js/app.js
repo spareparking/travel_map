@@ -415,6 +415,17 @@ function renderStats(visits) {
       <div class="progress" aria-label="${s.worldPct.toFixed(1)}% of the world's countries visited"><div style="width:${Math.min(100, s.worldPct)}%"></div></div>
     </section>
 
+    ${s.us.any ? `<section class="block">
+      <h3>United States</h3>
+      <div class="us-head">
+        <div class="tile-value">${s.us.visited.length}<span class="of">/50</span></div>
+        <div class="tile-label">state${s.us.visited.length === 1 ? '' : 's'} visited${s.us.dc ? ' <span class="muted">+ Washington, D.C.</span>' : ''}</div>
+      </div>
+      <div class="progress" aria-label="${s.us.visited.length} of 50 US states visited"><div style="width:${(s.us.visited.length / 50) * 100}%"></div></div>
+      ${s.us.visited.length ? `<p class="state-list">${s.us.visited.map(esc).join(', ')}</p>` : ''}
+      ${s.us.missing.length ? `<details class="state-missing"><summary>${s.us.missing.length} state${s.us.missing.length === 1 ? '' : 's'} to go</summary><p class="state-list muted">${s.us.missing.map(esc).join(', ')}</p></details>` : '<p class="state-list">🎉 All 50 states!</p>'}
+    </section>` : ''}
+
     <section class="block">
       <h3>Over time</h3>
       <p class="chart-title muted">Visits per year · hover a bar for new places</p>
