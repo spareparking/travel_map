@@ -183,10 +183,30 @@ function cityCombo(input, list, onPick) {
     list.innerHTML = html;
     const open = !!html;
     list.hidden = !open;
+    if (open) placeList();
     input.setAttribute('aria-expanded', String(open));
     if (active >= 0) input.setAttribute('aria-activedescendant', `${list.id}-${active}`);
     else input.removeAttribute('aria-activedescendant');
   };
+  // Place the list under the input (or above it if there's no room, e.g. phone keyboard open),
+  // sized to the space available on screen.
+  const placeList = () => {
+    const r = input.getBoundingClientRect();
+    const vv = window.visualViewport;
+    const top = vv ? vv.offsetTop : 0;
+    const bottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+    const below = bottom - r.bottom - 8, above = r.top - top - 8;
+    const up = below < 180 && above > below;
+    list.style.left = `${r.left}px`;
+    list.style.width = `${r.width}px`;
+    list.style.maxHeight = `${Math.max(120, Math.min(280, (up ? above : below) - 4))}px`;
+    if (up) { list.style.top = 'auto'; list.style.bottom = `${window.innerHeight - r.top + 4}px`; }
+    else { list.style.bottom = 'auto'; list.style.top = `${r.bottom + 4}px`; }
+  };
+  const reposition = () => { if (!list.hidden) placeList(); };
+  window.addEventListener('resize', reposition);
+  window.visualViewport && window.visualViewport.addEventListener('resize', reposition);
+  document.addEventListener('scroll', reposition, true);
   const pick = (c) => {
     if (c.online) c = registerOnlinePlace(c);
     selected = c;
@@ -615,8 +635,10 @@ function renderHomeRows() {
   $('homeRows').innerHTML = homes.length
     ? homes.map((h) => `<li class="${h.to == null ? 'current' : 'past'}${h.id === editingHomeId ? ' editing' : ''}">
         <span class="home-dot" aria-hidden="true">⌂</span>
-        <span class="home-name">${esc(h.city.name)} <span class="muted">${esc(countryName(h.city.cc))}</span></span>
-        <span class="home-years">${h.to == null ? `<span class="badge">Current</span> ${h.from != null ? `since ${h.from}` : ''}` : formatYears(h)}</span>
+        <span class="home-text">
+          <span class="home-name">${esc(h.city.name)} <span class="muted">${esc(countryName(h.city.cc))}</span></span>
+          <span class="home-years">${h.to == null ? `<span class="badge">Current</span> ${h.from != null ? `since ${h.from}` : ''}` : formatYears(h)}</span>
+        </span>
         <button type="button" class="link" data-home-edit="${esc(h.id)}" aria-label="Edit ${esc(h.city.name)}">Edit</button>
         <button type="button" class="link danger" data-home-del="${esc(h.id)}" aria-label="Remove ${esc(h.city.name)}">Remove</button>
       </li>`).join('')
