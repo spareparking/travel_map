@@ -10,7 +10,8 @@ A lean, single-page web app for marking the cities you've visited (with month an
 - **Stats:** countries, cities and continents, % of the world's 195 countries, US states visited (of 50, with D.C. noted separately), visits per year chart, busiest year, first and latest trip, farthest north/south/east/west, farthest from home, total round-trip distance, your homes, and most-visited cities and countries.
 - **Home cities:** **⋯ → Home cities** lets you list every place you've lived with the years you lived there. Only one can be current; adding a new current home moves the old one to your past homes. Distance stats measure each trip from the home you had that year, and visits to the city you lived in at the time don't count as trips.
 - **Time filter:** limit the map and stats to a year or a range of years.
-- **Your data stays yours:** saved in your browser (localStorage). Use **⋯ → Download backup** to save a file and **Restore from backup** to load it on another device.
+- **Cloud save (Google sign-in):** trips are always saved in the browser, and when you sign in with Google they're also saved to your own Firestore document and kept in sync across devices. If a browser clears its data, sign in again and everything comes back. The first sign-in on a device that already has trips combines them with the cloud copy. Changes made offline are uploaded when you're back online.
+- **Backups:** **⋯ → Download backup** saves a file; **Restore from backup** loads one.
 - **Share:** **⋯ → Share my map** makes a read-only link with your trips encoded in it (no server involved).
 
 ## Running it
@@ -36,6 +37,8 @@ css/style.css       styling (desktop + phone)
 js/app.js           map, dialogs, rendering, backup/restore
 js/stats.js         stat calculations (no DOM)
 js/share.js         compact encoding for share links
+js/cloud.js         Google sign-in + Firestore sync
+js/firebase-config.js  Firebase project settings (set to null to turn cloud save off)
 data/               cities, countries, and world outlines (generated)
 vendor/leaflet/     Leaflet 1.9.4 map library
 scripts/build_data.py  regenerates data/ from the original sources
@@ -47,3 +50,24 @@ scripts/build_data.py  regenerates data/ from the original sources
 - Online place search: [Nominatim](https://nominatim.org/) / © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors (ODbL)
 - Country outlines: [Natural Earth](https://www.naturalearthdata.com/) 1:50m admin-0 countries (public domain)
 - Map library: [Leaflet](https://leafletjs.com/) (BSD-2-Clause)
+
+## Cloud save setup (Firebase)
+
+1. Create a Firebase project and enable **Authentication → Sign-in method → Google**.
+2. Add the site's domain under **Authentication → Settings → Authorized domains**.
+3. Create a **Firestore** database (production mode) with these rules:
+
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}
+```
+
+4. Register a Web app and paste its config into `js/firebase-config.js`.
+
+Each user's data lives in one document at `users/{uid}`.

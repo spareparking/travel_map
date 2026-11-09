@@ -302,3 +302,17 @@ dialog form.home-form { flex: none; border-top: 1px solid var(--line); backgroun
 .state-missing { margin-top: 8px; }
 .state-missing summary { cursor: pointer; color: var(--accent); font-size: 14px; }
 .state-missing .state-list { margin-top: 6px; }
+
+/* ---------- Cloud save ---------- */
+.brand-wrap { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.cloud-status { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.cloud-status[data-state="error"] { color: var(--danger); }
+.cloud-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap;
+  background: #fff8e6; color: var(--ink-2); padding: 8px 16px; font-size: 14px; border-bottom: 1px solid #f0e2bd;
+}
+.cloud-banner-actions { display: flex; align-items: center; gap: 8px; }
+.menu-account {
+  font-size: 12px; color: var(--muted); padding: 8px 12px 6px; border-bottom: 1px solid var(--line); margin-bottom: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px;
+}
