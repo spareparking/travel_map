@@ -6,11 +6,13 @@ Inputs (download into a folder and pass it as the first argument):
   https://download.geonames.org/export/dump/countryInfo.txt
   https://download.geonames.org/export/dump/admin1CodesASCII.txt
   https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson
+  https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_1_states_provinces.geojson
 
 Outputs (written to ../data):
   cities.json     [[geonameId, name, admin1Name, countryCode, lat, lon, population], ...]
   countries.json  {countryCode: [name, continentCode]}
   world.geojson   country outlines with a single "cc" property, coordinates rounded
+  us-states.geojson  US state (+ D.C.) outlines with a single "name" property
 """
 import json, os, sys
 
@@ -82,4 +84,13 @@ for ft in gj["features"]:
     feats.append({"type": "Feature", "properties": {"cc": cc}, "geometry": geom(ft["geometry"])})
 with open(os.path.join(out, "world.geojson"), "w") as fh:
     json.dump({"type": "FeatureCollection", "features": feats}, fh, separators=(",", ":"))
+# US states
+gj = json.load(open(os.path.join(src, "ne_50m_admin_1_states_provinces.geojson"), encoding="utf-8"))
+states = [
+    {"type": "Feature", "properties": {"name": ft["properties"]["name"]}, "geometry": geom(ft["geometry"])}
+    for ft in gj["features"] if ft["properties"].get("iso_a2") == "US"
+]
+with open(os.path.join(out, "us-states.geojson"), "w") as fh:
+    json.dump({"type": "FeatureCollection", "features": states}, fh, separators=(",", ":"))
+print(f"{len(states)} US states")
 print(f"{len(cities)} cities, {len(countries)} countries, {len(feats)} outlines")

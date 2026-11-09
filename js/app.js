@@ -16,7 +16,7 @@ let countries = {};       // cc -> [name, continent]
 let data = { homes: [], visits: [] }; // homes: {id, cityId, from, to}  visits: {id, cityId, y, m}
 let readOnly = false;
 let filter = { from: null, to: null };
-let map, countryLayer, pinLayer, homeLayer, tempMarker;
+let map, countryLayer, stateLayer, pinLayer, homeLayer, tempMarker;
 
 const countryName = (cc) => (countries[cc] ? countries[cc][0] : cc);
 const cityLabel = (c) => `${c.name}, ${countryName(c.cc)}`;
@@ -410,6 +410,9 @@ const ACCENT = getComputedStyle(document.documentElement).getPropertyValue('--ac
 
 function initMap() {
   map = L.map('map', { worldCopyJump: true, minZoom: 1, maxZoom: 8, zoomSnap: 0.5, zoomControl: true }).setView([25, 10], 2);
+  // Land shapes (countries, US states) sit in their own layer below the pins
+  map.createPane('land');
+  map.getPane('land').style.zIndex = 350;
   map.attributionControl.setPrefix(false);
   map.attributionControl.addAttribution('Map: <a href="https://www.naturalearthdata.com/">Natural Earth</a> · Cities: <a href="https://www.geonames.org/">GeoNames</a>, <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap</a> · <a href="https://leafletjs.com">Leaflet</a>');
   pinLayer = L.layerGroup();
@@ -435,7 +438,15 @@ function initMap() {
 function drawMap(visits) {
   const visitedCC = new Set(visits.map((v) => v.city.cc));
   if (countryLayer) {
-    countryLayer.setStyle((f) => countryStyle(visitedCC.has(f.properties.cc)));
+    // Once US state outlines are loaded, the US is coloured state by state instead of as a whole
+    countryLayer.setStyle((f) => countryStyle(visitedCC.has(f.properties.cc) && !(stateLayer && f.properties.cc === 'US')));
+  }
+  if (stateLayer) {
+    const visitedStates = new Set(visits.filter((v) => v.city.cc === 'US').map((v) => {
+      const a = (v.city.admin || '').trim().toLowerCase();
+      return a === 'washington, d.c.' ? 'district of columbia' : a;
+    }));
+    stateLayer.setStyle((f) => stateStyle(visitedStates.has(f.properties.name.toLowerCase())));
   }
   pinLayer.clearLayers();
   const byCity = new Map();
@@ -456,6 +467,12 @@ function drawMap(visits) {
   }
   pinLayer.addTo(map);
   drawHomes();
+}
+
+function stateStyle(visited) {
+  return visited
+    ? { color: '#ffffff', weight: 0.6, opacity: 1, fill: true, fillColor: ACCENT, fillOpacity: 0.35 }
+    : { color: '#d5dae0', weight: 0.5, opacity: 1, fill: false };
 }
 
 function countryStyle(visited) {
@@ -1009,6 +1026,17 @@ function fitToVisits() {
 }
 
 // ---------- Boot ----------
+/** US state outlines load after the map is up (small file); until then the US is shaded as a whole. */
+async function loadStates() {
+  try {
+    const gj = await fetch('data/us-states.geojson').then((r) => r.json());
+    stateLayer = L.geoJSON(gj, { pane: 'land', interactive: false, style: () => stateStyle(false) }).addTo(map);
+    drawMap(filteredVisits());
+  } catch (err) {
+    console.error('US state outlines unavailable', err);
+  }
+}
+
 async function boot() {
   initMap();
   wireUi();
@@ -1018,7 +1046,7 @@ async function boot() {
     fetch('data/countries.json').then((r) => r.json()),
     fetch('data/world.geojson').then((r) => r.json()),
   ]);
-  countryLayer = L.geoJSON(world, { interactive: false, style: () => countryStyle(false) }).addTo(map);
+  countryLayer = L.geoJSON(world, { pane: 'land', interactive: false, style: () => countryStyle(false) }).addTo(map);
   countries = countryData;
   cities = cityRows.map(([id, name, admin, cc, lat, lon, pop]) => ({ id, name, admin, cc, lat, lon, pop, norm: norm(name) }));
   for (const c of cities) cityById.set(c.id, c);
@@ -1046,6 +1074,8 @@ async function boot() {
   renderAll();
   fitToVisits();
   $('loading').hidden = true;
+
+  loadStates();
 
   if (!readOnly) {
     // Ask the browser not to auto-delete this site's data (best effort; no prompt in most browsers)
