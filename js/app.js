@@ -430,6 +430,7 @@ function initMap() {
     if (!b) return;
     const city = cityById.get(+b.dataset.city);
     pinLayer.eachLayer((l) => l.closePopup());
+    homeLayer.eachLayer((l) => l.closePopup());
     if (b.dataset.popup === 'add') openVisitDialog({ city });
     if (b.dataset.popup === 'edit') openVisitDialog({ visit: data.visits.find((v) => v.id === b.dataset.id) });
   }, true);
@@ -454,9 +455,12 @@ function drawMap(visits) {
     if (!byCity.has(v.city.id)) byCity.set(v.city.id, []);
     byCity.get(v.city.id).push(v);
   }
-  for (const [, vs] of byCity) {
+  for (const vs of byCity.values()) vs.sort((a, b) => visitKey(a) - visitKey(b));
+  // Cities you've lived in are shown by their home marker (with a visit badge), not a separate pin underneath
+  const homeCities = new Set(resolvedHomes().map((h) => h.city.id));
+  for (const [cityId, vs] of byCity) {
+    if (homeCities.has(cityId)) continue;
     const c = vs[0].city;
-    vs.sort((a, b) => visitKey(a) - visitKey(b));
     const m = L.circleMarker([c.lat, c.lon], {
       radius: 5 + Math.min(6, (vs.length - 1) * 1.5),
       color: '#fff', weight: 2, fillColor: ACCENT, fillOpacity: 0.95, bubblingMouseEvents: false,
@@ -466,7 +470,7 @@ function drawMap(visits) {
     pinLayer.addLayer(m);
   }
   pinLayer.addTo(map);
-  drawHomes();
+  drawHomes(byCity);
 }
 
 function stateStyle(visited) {
@@ -481,30 +485,47 @@ function countryStyle(visited) {
     : { color: '#d5dae0', weight: 0.6, opacity: 1, fillColor: '#ffffff', fillOpacity: 1 };
 }
 
-function popupHtml(c, vs) {
+function popupHtml(c, vs, homes = []) {
+  const homeLines = homes.map((h) => `<div class="popup-home">⌂ ${h.to == null
+    ? `Current home${h.from != null ? ` · since ${h.from}` : ''}`
+    : `Lived here · ${formatYears(h)}`}</div>`).join('');
   const rows = vs.map((v) => `<li><span>${formatWhen(v)}</span>${readOnly ? '' : `<button type="button" class="link" data-popup="edit" data-id="${esc(v.id)}" data-city="${c.id}">Edit</button>`}</li>`).join('');
   return `<div class="popup"><strong>${esc(c.name)}</strong><div class="muted">${esc(countryName(c.cc))}</div>
-    <ul>${rows}</ul>${readOnly ? '' : `<button type="button" class="btn small primary" data-popup="add" data-city="${c.id}">+ Add another visit</button>`}</div>`;
+    ${homeLines}
+    ${vs.length ? `${homes.length ? `<div class="popup-sub muted">Visits</div>` : ''}<ul>${rows}</ul>` : ''}
+    ${readOnly ? '' : `<button type="button" class="btn small primary" data-popup="add" data-city="${c.id}">+ Add ${vs.length ? 'another' : 'a'} visit</button>`}</div>`;
 }
 
-function drawHomes() {
+/** One ⌂ per city you've lived in (even if you lived there more than once), with a badge for visits there. */
+function drawHomes(byCity = new Map()) {
   homeLayer.clearLayers();
+  const groups = new Map();
+  for (const h of resolvedHomes()) {
+    if (!groups.has(h.city.id)) groups.set(h.city.id, []);
+    groups.get(h.city.id).push(h);
+  }
   // Past homes first so the current home is drawn on top
-  for (const h of resolvedHomes().reverse()) {
-    const current = h.to == null;
-    const label = current
-      ? `Current home: ${esc(h.city.name)}${h.from != null ? ` · since ${h.from}` : ''}`
-      : `Past home: ${esc(h.city.name)} · ${formatYears(h)}`;
-    L.marker([h.city.lat, h.city.lon], {
+  const list = [...groups.values()].sort((a, b) => a.some((h) => h.to == null) - b.some((h) => h.to == null));
+  for (const homes of list) {
+    const c = homes[0].city;
+    const current = homes.some((h) => h.to == null);
+    const vs = byCity.get(c.id) || [];
+    const years = homes.map((h) => (h.to == null ? `since ${h.from ?? '?'}` : formatYears(h))).join(', ');
+    const label = `${current ? 'Current home' : 'Past home'}: ${esc(c.name)} · ${years}${vs.length ? ` · ${vs.length} visit${vs.length > 1 ? 's' : ''}` : ''}`;
+    const size = current ? 26 : 20;
+    L.marker([c.lat, c.lon], {
       icon: L.divIcon({
         className: `home-icon ${current ? 'current' : 'past'}`,
-        html: '<span aria-hidden="true">⌂</span>',
-        iconSize: current ? [26, 26] : [20, 20],
-        iconAnchor: current ? [13, 13] : [10, 10],
+        html: `<span aria-hidden="true">⌂</span>${vs.length ? `<span class="home-badge">${vs.length}</span>` : ''}`,
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
       }),
       keyboard: false,
       zIndexOffset: current ? 1000 : 500,
-    }).bindTooltip(label, { direction: 'top', offset: [0, -10] }).addTo(homeLayer);
+    })
+      .bindPopup(() => popupHtml(c, vs, homes))
+      .bindTooltip(label, { direction: 'top', offset: [0, -10] })
+      .addTo(homeLayer);
   }
 }
 
@@ -516,8 +537,8 @@ function showTempMarker(c) {
 function clearTempMarker() { if (tempMarker) { tempMarker.remove(); tempMarker = null; } }
 
 // ---------- Stats panel ----------
-function tile(value, label, sub = '') {
-  return `<div class="tile"><div class="tile-value">${value}</div><div class="tile-label">${label}</div>${sub ? `<div class="tile-sub">${sub}</div>` : ''}</div>`;
+function tile(value, label, sub = '', title = '') {
+  return `<div class="tile"${title ? ` title="${esc(title)}"` : ''}><div class="tile-value">${value}</div><div class="tile-label">${label}</div>${sub ? `<div class="tile-sub">${sub}</div>` : ''}</div>`;
 }
 const placeLine = (c) => `${esc(c.name)} <span class="muted">${esc(countryName(c.cc))}</span>`;
 
@@ -526,18 +547,18 @@ function yearChart(years) {
   const min = years[0].year, max = years[years.length - 1].year;
   const byYear = new Map(years.map((y) => [y.year, y]));
   const all = [];
-  for (let y = min; y <= max; y++) all.push(byYear.get(y) || { year: y, visits: 0, newCities: 0, newCountries: 0 });
-  const peak = Math.max(...all.map((y) => y.visits));
+  for (let y = min; y <= max; y++) all.push(byYear.get(y) || { year: y, trips: 0, newCities: 0, newCountries: 0 });
+  const peak = Math.max(...all.map((y) => y.trips));
   const step = Math.ceil(all.length / 8);
   const bars = all.map((y, i) => {
-    const h = y.visits ? Math.max(4, (y.visits / peak) * 100) : 0;
-    const tip = `${y.year}: ${y.visits} visit${y.visits === 1 ? '' : 's'} · ${y.newCities} new cit${y.newCities === 1 ? 'y' : 'ies'} · ${y.newCountries} new countr${y.newCountries === 1 ? 'y' : 'ies'}`;
+    const h = y.trips ? Math.max(4, (y.trips / peak) * 100) : 0;
+    const tip = `${y.year}: ${y.trips} trip${y.trips === 1 ? '' : 's'} · ${y.newCities} new cit${y.newCities === 1 ? 'y' : 'ies'} · ${y.newCountries} new countr${y.newCountries === 1 ? 'y' : 'ies'}`;
     const showLabel = i % step === 0 || i === all.length - 1;
     return `<div class="bar-col" tabindex="0" data-tip="${esc(tip)}" aria-label="${esc(tip)}">
       <div class="bar-area"><div class="bar" style="height:${h}%"></div></div>
       <div class="bar-label">${showLabel ? `’${String(y.year).slice(2)}` : ''}</div></div>`;
   }).join('');
-  return `<div class="chart" role="img" aria-label="Visits per year">
+  return `<div class="chart" role="img" aria-label="Trips per year">
       <div class="chart-peak muted">${peak}</div>
       <div class="bars">${bars}</div>
       <div class="chart-tip" hidden></div>
@@ -567,7 +588,7 @@ function renderStats(visits) {
         ${tile(s.countries, `countr${s.countries === 1 ? 'y' : 'ies'}`, `${s.worldPct.toFixed(1)}% of ${WORLD_COUNTRIES}`)}
         ${tile(s.cities, `cit${s.cities === 1 ? 'y' : 'ies'}`, s.returnCities ? `${s.returnCities} visited more than once` : '')}
         ${tile(`${s.continents.length}<span class="of">/7</span>`, 'continents', esc(contNames))}
-        ${tile(s.visits, `visit${s.visits === 1 ? '' : 's'}`, '')}
+        ${tile(s.trips, `trip${s.trips === 1 ? '' : 's'}`, s.trips !== s.visits ? `${s.visits} city visits` : '', 'Cities in the same country and month while abroad count as one trip')}
       </div>
       <div class="progress" aria-label="${s.worldPct.toFixed(1)}% of the world's countries visited"><div style="width:${Math.min(100, s.worldPct)}%"></div></div>
     </section>
@@ -585,10 +606,10 @@ function renderStats(visits) {
 
     <section class="block">
       <h3>Over time</h3>
-      <p class="chart-title muted">Visits per year · hover a bar for new places</p>
+      <p class="chart-title muted">Trips per year · hover a bar for details</p>
       ${yearChart(s.years)}
       <dl class="facts">
-        <div><dt>Busiest year</dt><dd>${s.busiest.year} <span class="muted">(${s.busiest.visits} visit${s.busiest.visits === 1 ? '' : 's'})</span></dd></div>
+        <div><dt>Busiest year</dt><dd>${s.busiest.year} <span class="muted">(${s.busiest.trips} trip${s.busiest.trips === 1 ? '' : 's'})</span></dd></div>
         <div><dt>First trip</dt><dd>${placeLine(s.first.city)} <span class="muted">· ${formatWhen(s.first)}</span></dd></div>
         <div><dt>Latest trip</dt><dd>${placeLine(s.latest.city)} <span class="muted">· ${formatWhen(s.latest)}</span></dd></div>
         <div><dt>New cities</dt><dd>${newInRange} <span class="muted">first-time visits${filter.from || filter.to ? ' in this range' : ''}</span></dd></div>
@@ -631,7 +652,10 @@ function renderStats(visits) {
         </div>
         <div>
           <h4>Most-visited countries</h4>
-          <ol class="rank">${s.topCountries.map((c) => `<li><span>${esc(countryName(c.cc))}</span><span class="muted" title="${c.visits} visits, ${c.cities} cities">${c.visits}× · ${c.cities} cit${c.cities === 1 ? 'y' : 'ies'}</span></li>`).join('')}</ol>
+          ${s.topCountries.length
+            ? `<ol class="rank">${s.topCountries.map((c) => `<li><span>${esc(countryName(c.cc))}</span><span class="muted" title="${c.visits} trip${c.visits === 1 ? '' : 's'}, ${c.cities} cit${c.cities === 1 ? 'y' : 'ies'}">${c.visits} trip${c.visits === 1 ? '' : 's'} · ${c.cities} cit${c.cities === 1 ? 'y' : 'ies'}</span></li>`).join('')}</ol>`
+            : '<p class="muted rank-empty">No trips abroad in this range yet.</p>'}
+          ${s.topCountriesAbroadOnly ? '<p class="muted rank-note">Not counting the country you lived in at the time.</p>' : ''}
         </div>
       </div>
     </section>`;

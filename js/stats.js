@@ -73,6 +73,23 @@ export function homeAt(homes, year) {
 }
 
 /**
+ * Group city visits into trips. Several cities in the same country and the same month count as ONE trip
+ * when that country is abroad (not where you lived that year). Visits at home, and visits with no month,
+ * are always their own trip. With no homes set, every country counts as abroad.
+ * @returns {Array<{y:number, m:number, cc:string, visits:Array}>}
+ */
+export function groupTrips(visits, homes = []) {
+  const trips = new Map();
+  for (const v of visits) {
+    const abroad = !homes.length || homeAt(homes, v.y).city.cc !== v.city.cc;
+    const key = abroad && v.m ? `${v.city.cc}|${v.y}|${v.m}` : `visit|${v.id}`;
+    if (!trips.has(key)) trips.set(key, { y: v.y, m: v.m || 0, cc: v.city.cc, abroad, visits: [] });
+    trips.get(key).visits.push(v);
+  }
+  return [...trips.values()];
+}
+
+/**
  * @param {Array} visits    visits to summarise (already filtered). Each: {id, y, m, city:{id,name,cc,lat,lon}}
  * @param {Array} allVisits every visit, used to decide when a place was first visited
  * @param {Object} ctx      {homes: [{city, from, to}], countries: {cc: [name, continent]}}
@@ -107,18 +124,23 @@ export function computeStats(visits, allVisits, ctx) {
     if (!firstCountry.has(v.city.cc)) firstCountry.set(v.city.cc, v.id);
   }
 
-  // Per year
+  const trips = groupTrips(visits, homes);
+
+  // Per year: trips (not city stops), plus places seen for the first time
   const years = new Map();
+  const yearOf = (yr) => {
+    if (!years.has(yr)) years.set(yr, { year: yr, trips: 0, newCities: 0, newCountries: 0 });
+    return years.get(yr);
+  };
+  for (const t of trips) yearOf(t.y).trips++;
   for (const v of visits) {
-    const y = years.get(v.y) || { year: v.y, visits: 0, newCities: 0, newCountries: 0 };
-    y.visits++;
+    const y = yearOf(v.y);
     if (firstCity.get(v.city.id) === v.id) y.newCities++;
     if (firstCountry.get(v.city.cc) === v.id) y.newCountries++;
-    years.set(v.y, y);
   }
   const yearList = [...years.values()].sort((a, b) => a.year - b.year);
   let busiest = null;
-  for (const y of yearList) if (!busiest || y.visits > busiest.visits) busiest = y;
+  for (const y of yearList) if (!busiest || y.trips > busiest.trips) busiest = y;
 
   const sorted = [...visits].sort((a, b) => visitKey(a) - visitKey(b));
 
@@ -132,27 +154,32 @@ export function computeStats(visits, allVisits, ctx) {
     west: pick((a, b) => a.lon < b.lon),
   } : null;
 
-  // Home distances: each visit is measured from where you lived that year.
-  // Visits to the city you lived in at the time are not trips.
+  // Home distances: each trip is measured from where you lived that year, as one round trip
+  // to its farthest city. Visits to the city you lived in at the time are not trips.
   let fromHome = null;
   if (homes.length) {
     let farthest = null;
     let total = 0;
-    let trips = 0;
-    for (const v of visits) {
-      const h = homeAt(homes, v.y);
-      if (v.city.id === h.city.id) continue;
-      const d = distanceKm(h.city, v.city);
-      trips++;
-      total += 2 * d;
-      if (!farthest || d > farthest.km) farthest = { city: v.city, km: d, home: h.city };
+    let tripCount = 0;
+    for (const t of trips) {
+      const h = homeAt(homes, t.y);
+      let tripKm = -1;
+      for (const v of t.visits) {
+        if (v.city.id === h.city.id) continue;
+        const d = distanceKm(h.city, v.city);
+        tripKm = Math.max(tripKm, d);
+        if (!farthest || d > farthest.km) farthest = { city: v.city, km: d, home: h.city };
+      }
+      if (tripKm < 0) continue;
+      tripCount++;
+      total += 2 * tripKm;
     }
     fromHome = {
       farthest,
       roundTripKm: total,
       aroundEarth: total / EARTH_CIRCUMFERENCE_KM,
-      averageKm: trips ? total / 2 / trips : 0,
-      trips,
+      averageKm: tripCount ? total / 2 / tripCount : 0,
+      trips: tripCount,
     };
   }
 
@@ -160,13 +187,23 @@ export function computeStats(visits, allVisits, ctx) {
   const topCities = [...cityMap.values()]
     .sort((a, b) => b.count - a.count || b.last - a.last)
     .slice(0, 5);
-  const topCountries = [...countryMap.values()]
-    .map((c) => ({ cc: c.cc, visits: c.visits, cities: c.cities.size }))
+  // Most-visited countries counts trips abroad (not the country you were living in at the time)
+  const abroad = new Map(); // cc -> {visits (trips), cities:Set}
+  for (const t of trips) {
+    if (!t.abroad) continue;
+    const e = abroad.get(t.cc) || { visits: 0, cities: new Set() };
+    e.visits++;
+    for (const v of t.visits) e.cities.add(v.city.id);
+    abroad.set(t.cc, e);
+  }
+  const topCountries = [...abroad.entries()]
+    .map(([cc, e]) => ({ cc, visits: e.visits, cities: e.cities.size }))
     .sort((a, b) => b.visits - a.visits || b.cities - a.cities)
     .slice(0, 5);
 
   return {
     visits: visits.length,
+    trips: trips.length,
     cities: cityMap.size,
     countries: countryMap.size,
     continents: [...continentSet].sort(),
@@ -179,6 +216,7 @@ export function computeStats(visits, allVisits, ctx) {
     fromHome,
     topCities,
     topCountries,
+    topCountriesAbroadOnly: homes.length > 0,
     returnCities: [...cityMap.values()].filter((e) => e.count > 1).length,
     us: usStatesVisited(visits),
   };

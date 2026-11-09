@@ -316,3 +316,16 @@ dialog form.home-form { flex: none; border-top: 1px solid var(--line); backgroun
   font-size: 12px; color: var(--muted); padding: 8px 12px 6px; border-bottom: 1px solid var(--line); margin-bottom: 4px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px;
 }
+
+/* ---------- Home marker with visits ---------- */
+.home-icon { position: relative; overflow: visible; }
+.home-badge {
+  position: absolute; top: -7px; right: -9px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 8px; background: var(--accent); color: #fff; border: 1.5px solid #fff;
+  font-size: 10px; font-weight: 700; line-height: 13px; text-align: center; box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.popup-home { margin-top: 6px; font-size: 13px; color: var(--ink-2); }
+.popup-sub { margin-top: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+.popup-sub + ul { margin-top: 2px; }
+.rank-note, .rank-empty { font-size: 12px; margin: 6px 0 0; }
