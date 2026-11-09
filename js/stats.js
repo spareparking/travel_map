@@ -160,8 +160,17 @@ export function computeStats(visits, allVisits, ctx) {
   const topCities = [...cityMap.values()]
     .sort((a, b) => b.count - a.count || b.last - a.last)
     .slice(0, 5);
-  const topCountries = [...countryMap.values()]
-    .map((c) => ({ cc: c.cc, visits: c.visits, cities: c.cities.size }))
+  // Most-visited countries leaves out the country you were living in at the time of each visit
+  const abroad = new Map(); // cc -> {visits, cities:Set}
+  for (const v of visits) {
+    if (homes.length && homeAt(homes, v.y).city.cc === v.city.cc) continue;
+    const e = abroad.get(v.city.cc) || { visits: 0, cities: new Set() };
+    e.visits++;
+    e.cities.add(v.city.id);
+    abroad.set(v.city.cc, e);
+  }
+  const topCountries = [...abroad.entries()]
+    .map(([cc, e]) => ({ cc, visits: e.visits, cities: e.cities.size }))
     .sort((a, b) => b.visits - a.visits || b.cities - a.cities)
     .slice(0, 5);
 
@@ -179,6 +188,7 @@ export function computeStats(visits, allVisits, ctx) {
     fromHome,
     topCities,
     topCountries,
+    topCountriesAbroadOnly: homes.length > 0,
     returnCities: [...cityMap.values()].filter((e) => e.count > 1).length,
     us: usStatesVisited(visits),
   };
