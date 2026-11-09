@@ -28,13 +28,34 @@ export function formatWhen(v) {
   return v.m ? `${MONTHS[v.m - 1]} ${v.y}` : `${v.y}`;
 }
 
+/** "2015–2019", "2019–now", "2019", "?–2012" for a home's years. */
+export function formatYears(h) {
+  if (h.to == null) return h.from == null ? 'now' : `${h.from}–now`;
+  if (h.from === h.to) return `${h.from}`;
+  return `${h.from ?? '?'}–${h.to}`;
+}
+
+/**
+ * Which home was "home" in a given year. Homes: {city, from, to}; from null = unknown start, to null = current.
+ * In a moving year (two homes match) the newer home wins. If no home covers the year, the closest in time is used.
+ */
+export function homeAt(homes, year) {
+  let best = null, bestGap = Infinity, bestFrom = -Infinity;
+  for (const h of homes) {
+    const from = h.from ?? -Infinity, to = h.to ?? Infinity;
+    const gap = year < from ? from - year : year > to ? year - to : 0;
+    if (gap < bestGap || (gap === bestGap && from > bestFrom)) { best = h; bestGap = gap; bestFrom = from; }
+  }
+  return best;
+}
+
 /**
  * @param {Array} visits    visits to summarise (already filtered). Each: {id, y, m, city:{id,name,cc,lat,lon}}
  * @param {Array} allVisits every visit, used to decide when a place was first visited
- * @param {Object} ctx      {home: city|null, countries: {cc: [name, continent]}}
+ * @param {Object} ctx      {homes: [{city, from, to}], countries: {cc: [name, continent]}}
  */
 export function computeStats(visits, allVisits, ctx) {
-  const { home, countries } = ctx;
+  const { homes = [], countries } = ctx;
   const continentOf = (cc) => (countries[cc] ? countries[cc][1] : null);
 
   // Unique places
@@ -88,23 +109,27 @@ export function computeStats(visits, allVisits, ctx) {
     west: pick((a, b) => a.lon < b.lon),
   } : null;
 
-  // Home distances (ignore visits to the home city itself)
+  // Home distances: each visit is measured from where you lived that year.
+  // Visits to the city you lived in at the time are not trips.
   let fromHome = null;
-  if (home) {
-    const away = visits.filter((v) => v.city.id !== home.id);
+  if (homes.length) {
     let farthest = null;
     let total = 0;
-    for (const v of away) {
-      const d = distanceKm(home, v.city);
+    let trips = 0;
+    for (const v of visits) {
+      const h = homeAt(homes, v.y);
+      if (v.city.id === h.city.id) continue;
+      const d = distanceKm(h.city, v.city);
+      trips++;
       total += 2 * d;
-      if (!farthest || d > farthest.km) farthest = { city: v.city, km: d };
+      if (!farthest || d > farthest.km) farthest = { city: v.city, km: d, home: h.city };
     }
     fromHome = {
       farthest,
       roundTripKm: total,
       aroundEarth: total / EARTH_CIRCUMFERENCE_KM,
-      averageKm: away.length ? total / 2 / away.length : 0,
-      trips: away.length,
+      averageKm: trips ? total / 2 / trips : 0,
+      trips,
     };
   }
 

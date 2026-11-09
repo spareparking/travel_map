@@ -1,4 +1,4 @@
-import { computeStats, CONTINENTS, MONTHS, formatWhen, visitKey, WORLD_COUNTRIES } from './stats.js';
+import { computeStats, CONTINENTS, MONTHS, formatWhen, formatYears, visitKey, WORLD_COUNTRIES } from './stats.js';
 import { encodeShare, decodeShare } from './share.js';
 
 const STORAGE_KEY = 'travelmap.v1';
@@ -10,15 +10,15 @@ const fmtNum = (n) => Math.round(n).toLocaleString();
 let cities = [];          // [{id,name,admin,cc,lat,lon,pop,norm}]
 const cityById = new Map();
 let countries = {};       // cc -> [name, continent]
-let data = { home: null, visits: [] }; // visits: {id, cityId, y, m}
+let data = { homes: [], visits: [] }; // homes: {id, cityId, from, to}  visits: {id, cityId, y, m}
 let readOnly = false;
 let filter = { from: null, to: null };
-let map, countryLayer, pinLayer, homeMarker, tempMarker;
+let map, countryLayer, pinLayer, homeLayer, tempMarker;
 
 const countryName = (cc) => (countries[cc] ? countries[cc][0] : cc);
 const cityLabel = (c) => `${c.name}, ${countryName(c.cc)}`;
 const cityLabelLong = (c) => (c.admin && c.admin !== c.name ? `${c.name}, ${c.admin}, ${countryName(c.cc)}` : cityLabel(c));
-const norm = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+const norm = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 
 // ---------- Storage ----------
 function load() {
@@ -26,7 +26,7 @@ function load() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const d = JSON.parse(raw);
-      if (d && Array.isArray(d.visits)) data = { home: d.home || null, visits: d.visits };
+      if (d && Array.isArray(d.visits)) data = { homes: migrateHomes(d), visits: d.visits };
     }
   } catch { /* storage unavailable: start empty */ }
 }
@@ -38,7 +38,21 @@ function save() {
     toast("Couldn't save in this browser. Download a backup to keep your data.");
   }
 }
+/** Older saves had a single `home` city id; newer ones have a `homes` list. */
+function migrateHomes(d) {
+  if (Array.isArray(d.homes)) return d.homes;
+  return d.home ? [{ id: newId(), cityId: d.home, from: null, to: null }] : [];
+}
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
+
+/** Homes with their city attached, newest first (current home on top). */
+function resolvedHomes() {
+  return data.homes
+    .map((h) => ({ ...h, city: cityById.get(h.cityId) }))
+    .filter((h) => h.city)
+    .sort((a, b) => (b.to ?? Infinity) - (a.to ?? Infinity) || (b.from ?? -Infinity) - (a.from ?? -Infinity));
+}
+const currentHome = () => resolvedHomes().find((h) => h.to == null) || null;
 
 function resolvedVisits() {
   return data.visits.map((v) => ({ ...v, city: cityById.get(v.cityId) })).filter((v) => v.city);
@@ -135,6 +149,7 @@ function initMap() {
   map.attributionControl.setPrefix(false);
   map.attributionControl.addAttribution('Map: <a href="https://www.naturalearthdata.com/">Natural Earth</a> · Cities: <a href="https://www.geonames.org/">GeoNames</a> · <a href="https://leafletjs.com">Leaflet</a>');
   pinLayer = L.layerGroup();
+  homeLayer = L.layerGroup().addTo(map);
   map.on('click', (e) => {
     if (readOnly) return;
     const ll = e.latlng.wrap();
@@ -176,7 +191,7 @@ function drawMap(visits) {
     pinLayer.addLayer(m);
   }
   pinLayer.addTo(map);
-  drawHome();
+  drawHomes();
 }
 
 function countryStyle(visited) {
@@ -191,14 +206,25 @@ function popupHtml(c, vs) {
     <ul>${rows}</ul>${readOnly ? '' : `<button type="button" class="btn small primary" data-popup="add" data-city="${c.id}">+ Add another visit</button>`}</div>`;
 }
 
-function drawHome() {
-  if (homeMarker) { homeMarker.remove(); homeMarker = null; }
-  const h = data.home && cityById.get(data.home);
-  if (!h) return;
-  homeMarker = L.marker([h.lat, h.lon], {
-    icon: L.divIcon({ className: 'home-icon', html: '<span aria-hidden="true">⌂</span>', iconSize: [24, 24], iconAnchor: [12, 12] }),
-    keyboard: false, zIndexOffset: 1000,
-  }).bindTooltip(`Home: ${esc(h.name)}`, { direction: 'top', offset: [0, -10] }).addTo(map);
+function drawHomes() {
+  homeLayer.clearLayers();
+  // Past homes first so the current home is drawn on top
+  for (const h of resolvedHomes().reverse()) {
+    const current = h.to == null;
+    const label = current
+      ? `Current home: ${esc(h.city.name)}${h.from != null ? ` · since ${h.from}` : ''}`
+      : `Past home: ${esc(h.city.name)} · ${formatYears(h)}`;
+    L.marker([h.city.lat, h.city.lon], {
+      icon: L.divIcon({
+        className: `home-icon ${current ? 'current' : 'past'}`,
+        html: '<span aria-hidden="true">⌂</span>',
+        iconSize: current ? [26, 26] : [20, 20],
+        iconAnchor: current ? [13, 13] : [10, 10],
+      }),
+      keyboard: false,
+      zIndexOffset: current ? 1000 : 500,
+    }).bindTooltip(label, { direction: 'top', offset: [0, -10] }).addTo(homeLayer);
+  }
 }
 
 function showTempMarker(c) {
@@ -239,7 +265,7 @@ function yearChart(years) {
 
 function renderStats(visits) {
   const el = $('tab-stats');
-  const home = data.home ? cityById.get(data.home) : null;
+  const homes = resolvedHomes();
   if (!visits.length) {
     el.innerHTML = data.visits.length
       ? `<div class="empty"><p>No visits in this time range.</p></div>`
@@ -248,7 +274,7 @@ function renderStats(visits) {
          ${readOnly ? '' : '<button type="button" class="btn primary" data-act="add">+ Add your first visit</button>'}</div>`;
     return;
   }
-  const s = computeStats(visits, resolvedVisits(), { home, countries });
+  const s = computeStats(visits, resolvedVisits(), { homes, countries });
   const contNames = s.continents.map((c) => CONTINENTS[c]).join(', ');
   const newInRange = s.years.reduce((a, y) => a + y.newCities, 0);
   const ex = s.extremes;
@@ -285,14 +311,24 @@ function renderStats(visits) {
         <div><dt>Farthest east</dt><dd>${placeLine(ex.east)} <span class="muted">${ex.east.lon.toFixed(1)}°</span></dd></div>
         <div><dt>Farthest west</dt><dd>${placeLine(ex.west)} <span class="muted">${ex.west.lon.toFixed(1)}°</span></dd></div>
       </dl>
-      ${home ? (fh.trips ? `
+      ${homes.length ? (fh.trips ? `
       <dl class="facts">
-        <div><dt>Farthest from home</dt><dd>${placeLine(fh.farthest.city)} <span class="muted">· ${fmtNum(fh.farthest.km)} km</span></dd></div>
-        <div><dt>Average trip</dt><dd>${fmtNum(fh.averageKm)} km <span class="muted">from ${esc(home.name)}</span></dd></div>
+        <div><dt>Farthest from home</dt><dd>${placeLine(fh.farthest.city)} <span class="muted">· ${fmtNum(fh.farthest.km)} km${homes.length > 1 ? ` from ${esc(fh.farthest.home.name)}` : ''}</span></dd></div>
+        <div><dt>Average trip</dt><dd>${fmtNum(fh.averageKm)} km <span class="muted">from ${homes.length > 1 ? 'home at the time' : esc(homes[0].city.name)}</span></dd></div>
         <div><dt>Round trips from home</dt><dd>${fmtNum(fh.roundTripKm)} km <span class="muted">· ${fh.aroundEarth.toFixed(1)}× around the Earth</span></dd></div>
-      </dl>` : `<p class="muted">All visits in this range are in your home city.</p>`)
-      : (readOnly ? '' : `<p class="muted note">Set a home city to see distance-from-home stats. <button type="button" class="link" data-act="home">Set home city</button></p>`)}
+      </dl>` : `<p class="muted note">All visits in this range are in the city you lived in at the time.</p>`)
+      : (readOnly ? '' : `<p class="muted note">Add your home cities to see distance-from-home stats. <button type="button" class="link" data-act="home">Add home cities</button></p>`)}
     </section>
+
+    ${homes.length ? `<section class="block">
+      <h3>Home${homes.length > 1 ? 's' : ''}</h3>
+      <ul class="home-list">${homes.map((h) => `<li class="${h.to == null ? 'current' : 'past'}">
+        <span class="home-dot" aria-hidden="true">⌂</span>
+        <span>${placeLine(h.city)}</span>
+        <span class="home-years">${h.to == null ? `<span class="badge">Current</span> ${h.from != null ? `since ${h.from}` : ''}` : formatYears(h)}</span>
+      </li>`).join('')}</ul>
+      ${readOnly ? '' : '<button type="button" class="link note-link" data-act="home">Edit homes</button>'}
+    </section>` : ''}
 
     <section class="block">
       <h3>Favourites</h3>
@@ -456,29 +492,96 @@ function deleteVisit() {
   toast('Visit deleted');
 }
 
-// ---------- Home dialog ----------
+// ---------- Homes dialog ----------
+let editingHomeId = null;
+
+function fillHomeYearSelects() {
+  const now = new Date().getFullYear();
+  let fromOpts = '<option value="">Not sure</option>', toOpts = '<option value="">Now (current home)</option>';
+  for (let y = now; y >= 1930; y--) {
+    fromOpts += `<option value="${y}">${y}</option>`;
+    toOpts += `<option value="${y}">${y}</option>`;
+  }
+  $('homeFrom').innerHTML = fromOpts;
+  $('homeTo').innerHTML = toOpts;
+}
+
+function renderHomeRows() {
+  const homes = resolvedHomes();
+  $('homeRows').innerHTML = homes.length
+    ? homes.map((h) => `<li class="${h.to == null ? 'current' : 'past'}${h.id === editingHomeId ? ' editing' : ''}">
+        <span class="home-dot" aria-hidden="true">⌂</span>
+        <span class="home-name">${esc(h.city.name)} <span class="muted">${esc(countryName(h.city.cc))}</span></span>
+        <span class="home-years">${h.to == null ? `<span class="badge">Current</span> ${h.from != null ? `since ${h.from}` : ''}` : formatYears(h)}</span>
+        <button type="button" class="link" data-home-edit="${esc(h.id)}" aria-label="Edit ${esc(h.city.name)}">Edit</button>
+        <button type="button" class="link danger" data-home-del="${esc(h.id)}" aria-label="Remove ${esc(h.city.name)}">Remove</button>
+      </li>`).join('')
+    : '<li class="home-empty muted">No homes yet. Add your current home below.</li>';
+}
+
+function resetHomeForm(h = null) {
+  editingHomeId = h ? h.id : null;
+  homeCombo.set(h ? cityById.get(h.cityId) : null);
+  const hasCurrent = data.homes.some((x) => x.to == null && x.id !== editingHomeId);
+  $('homeFrom').value = h && h.from != null ? String(h.from) : '';
+  // New homes default to "Now" only if there's no current home yet
+  $('homeTo').value = h ? (h.to != null ? String(h.to) : '') : (hasCurrent ? String(new Date().getFullYear()) : '');
+  $('homeFormTitle').textContent = h ? 'Edit home' : 'Add a home';
+  $('saveHomeBtn').textContent = h ? 'Save changes' : 'Add home';
+  $('cancelHomeEditBtn').hidden = !h;
+  $('homeError').hidden = true;
+  renderHomeRows();
+}
+
 function openHomeDialog() {
-  homeCombo.set(data.home ? cityById.get(data.home) : null);
+  resetHomeForm();
   $('homeDialog').showModal();
   $('homeInput').focus();
 }
+
 function saveHome(e) {
   e.preventDefault();
+  const err = (msg) => { $('homeError').textContent = msg; $('homeError').hidden = false; };
   const c = homeCombo.get();
-  if (!c && $('homeInput').value.trim()) { toast('Pick a city from the suggestions.'); return; }
-  data.home = c ? c.id : null;
+  if (!c) return err('Pick a city from the suggestions.');
+  const from = $('homeFrom').value ? +$('homeFrom').value : null;
+  const to = $('homeTo').value ? +$('homeTo').value : null;
+  if (from != null && to != null && from > to) return err('"From" year must be before the "until" year.');
+
+  let note = '';
+  if (to == null) {
+    // Only one current home: the previous one becomes a past home ending the year you moved
+    const prev = data.homes.find((h) => h.to == null && h.id !== editingHomeId);
+    if (prev) {
+      const end = from ?? new Date().getFullYear();
+      if (prev.from != null && prev.from > end) return err(`Your current home (${cityById.get(prev.cityId)?.name}) starts after ${end}. Set its dates first.`);
+      prev.to = end;
+      note = ` ${cityById.get(prev.cityId)?.name} moved to past homes (until ${end}).`;
+    }
+  }
+  const wasEditing = !!editingHomeId;
+  if (wasEditing) Object.assign(data.homes.find((h) => h.id === editingHomeId), { cityId: c.id, from, to });
+  else data.homes.push({ id: newId(), cityId: c.id, from, to });
   save();
-  $('homeDialog').close();
   renderAll();
-  toast(c ? `Home set to ${c.name}` : 'Home city cleared');
+  resetHomeForm();
+  toast(`${wasEditing ? 'Updated' : 'Added'} ${c.name}.${note}`);
+}
+
+function deleteHome(id) {
+  const h = data.homes.find((x) => x.id === id);
+  if (!h || !confirm(`Remove ${cityById.get(h.cityId)?.name || 'this home'} from your homes?`)) return;
+  data.homes = data.homes.filter((x) => x.id !== id);
+  save();
+  renderAll();
+  resetHomeForm();
 }
 
 // ---------- Backup / restore / share ----------
 function downloadBackup() {
-  const home = data.home ? cityById.get(data.home) : null;
   const payload = {
-    app: 'travel-map', version: 1, exportedAt: new Date().toISOString(),
-    home: home ? { cityId: home.id, city: cityLabel(home) } : null,
+    app: 'travel-map', version: 2, exportedAt: new Date().toISOString(),
+    homes: resolvedHomes().map((h) => ({ cityId: h.cityId, city: cityLabel(h.city), from: h.from, to: h.to })),
     visits: [...data.visits].sort((a, b) => visitKey(a) - visitKey(b)).map((v) => {
       const c = cityById.get(v.cityId);
       return { cityId: v.cityId, city: c ? cityLabel(c) : '', year: v.y, month: v.m || null };
@@ -506,7 +609,12 @@ async function restoreBackup(file) {
       ? `Replace your current ${data.visits.length} visits with the ${visits.length} in this backup?`
       : `Load ${visits.length} visits from this backup?`;
     if (!confirm(msg)) return;
-    data = { home: d.home && cityById.has(+d.home.cityId) ? +d.home.cityId : null, visits };
+    const homes = Array.isArray(d.homes)
+      ? d.homes.filter((h) => cityById.has(+h.cityId)).map((h) => ({
+        id: newId(), cityId: +h.cityId, from: Number.isInteger(h.from) ? h.from : null, to: Number.isInteger(h.to) ? h.to : null,
+      }))
+      : (d.home && cityById.has(+d.home.cityId) ? [{ id: newId(), cityId: +d.home.cityId, from: null, to: null }] : []);
+    data = { homes, visits };
     filter = { from: null, to: null };
     save();
     renderAll();
@@ -550,9 +658,16 @@ function wireUi() {
   $('deleteVisitBtn').addEventListener('click', deleteVisit);
   $('visitDialog').addEventListener('close', clearTempMarker);
 
+  fillHomeYearSelects();
   $('homeForm').addEventListener('submit', saveHome);
-  $('cancelHomeBtn').addEventListener('click', () => $('homeDialog').close());
-  $('clearHomeBtn').addEventListener('click', () => { homeCombo.set(null); });
+  $('doneHomeBtn').addEventListener('click', () => $('homeDialog').close());
+  $('cancelHomeEditBtn').addEventListener('click', () => resetHomeForm());
+  $('homeRows').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.homeEdit) { resetHomeForm(data.homes.find((h) => h.id === b.dataset.homeEdit)); $('homeInput').focus(); }
+    if (b.dataset.homeDel) deleteHome(b.dataset.homeDel);
+  });
 
   $('closeShareBtn').addEventListener('click', () => $('shareDialog').close());
   $('copyShareBtn').addEventListener('click', copyShare);

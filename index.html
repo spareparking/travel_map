@@ -24,7 +24,7 @@
       <div class="menu edit-only">
         <button class="btn" id="menuBtn" type="button" aria-haspopup="true" aria-expanded="false" aria-label="More options">⋯</button>
         <div class="menu-list" id="menuList" role="menu" hidden>
-          <button type="button" role="menuitem" data-action="home">Set home city</button>
+          <button type="button" role="menuitem" data-action="home">Home cities</button>
           <button type="button" role="menuitem" data-action="share">Share my map</button>
           <button type="button" role="menuitem" data-action="backup">Download backup</button>
           <button type="button" role="menuitem" data-action="restore">Restore from backup</button>
@@ -86,11 +86,15 @@
     </form>
   </dialog>
 
-  <!-- Home city dialog -->
-  <dialog id="homeDialog">
-    <form method="dialog" id="homeForm" autocomplete="off">
-      <h2>Home city</h2>
-      <p class="muted">Used for distance stats like "farthest from home".</p>
+  <!-- Homes dialog -->
+  <dialog id="homeDialog" class="wide">
+    <div class="dialog-pad">
+      <h2>Home cities</h2>
+      <p class="muted">Add where you've lived and when. Each trip's distance is measured from the home you had that year.</p>
+      <ul class="home-rows" id="homeRows"></ul>
+    </div>
+    <form id="homeForm" class="home-form" autocomplete="off">
+      <h3 id="homeFormTitle">Add a home</h3>
       <label class="field">
         <span>City</span>
         <div class="combo">
@@ -98,11 +102,22 @@
           <ul id="homeList" class="suggest" role="listbox" hidden></ul>
         </div>
       </label>
+      <div class="row">
+        <label class="field">
+          <span>Lived there from</span>
+          <select id="homeFrom"></select>
+        </label>
+        <label class="field">
+          <span>Until</span>
+          <select id="homeTo"></select>
+        </label>
+      </div>
+      <p class="error" id="homeError" hidden></p>
       <div class="dialog-actions">
-        <button type="button" class="btn danger" id="clearHomeBtn">Clear</button>
+        <button type="button" class="btn" id="cancelHomeEditBtn" hidden>Cancel edit</button>
+        <button type="submit" class="btn" id="saveHomeBtn">Add home</button>
         <span class="spacer"></span>
-        <button type="button" class="btn" id="cancelHomeBtn">Cancel</button>
-        <button type="submit" class="btn primary">Save</button>
+        <button type="button" class="btn primary" id="doneHomeBtn">Done</button>
       </div>
     </form>
   </dialog>

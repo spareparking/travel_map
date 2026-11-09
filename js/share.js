@@ -1,7 +1,10 @@
 // Packs trips into a compact, compressed string for share links, and back.
-// Layout: [version u8][homeId u32][count u16] then per visit [cityId u32][year-1900 u8][month u8]
+// v2 layout: [version u8 = 2][homeCount u8] per home [cityId u32][from u8][to u8]
+//            [visitCount u16] per visit [cityId u32][year-1900 u8][month u8]
+// Years are stored as year-1900; 0 means "unknown" for `from` and "now" for `to`.
+// v1 (older links): [version u8 = 1][homeId u32][visitCount u16] then visits as above.
 
-const VERSION = 1;
+const VERSION = 2;
 
 function toBase64Url(bytes) {
   let s = '';
@@ -23,20 +26,25 @@ async function pipe(bytes, stream) {
 }
 
 const canCompress = typeof CompressionStream !== 'undefined';
+const yearByte = (y) => (y == null ? 0 : Math.max(1, Math.min(255, y - 1900)));
+const byteYear = (b) => (b === 0 ? null : 1900 + b);
 
 export async function encodeShare(data) {
+  const homes = data.homes.slice(0, 255);
   const visits = data.visits.slice(0, 65535);
-  const buf = new DataView(new ArrayBuffer(7 + visits.length * 6));
-  buf.setUint8(0, VERSION);
-  buf.setUint32(1, data.home || 0);
-  buf.setUint16(5, visits.length);
-  visits.forEach((v, i) => {
-    const o = 7 + i * 6;
-    buf.setUint32(o, v.cityId);
-    buf.setUint8(o + 4, Math.max(0, Math.min(255, v.y - 1900)));
-    buf.setUint8(o + 5, v.m || 0);
-  });
-  const raw = new Uint8Array(buf.buffer);
+  const size = 2 + homes.length * 6 + 2 + visits.length * 6;
+  const dv = new DataView(new ArrayBuffer(size));
+  let o = 0;
+  dv.setUint8(o++, VERSION);
+  dv.setUint8(o++, homes.length);
+  for (const h of homes) {
+    dv.setUint32(o, h.cityId); dv.setUint8(o + 4, yearByte(h.from)); dv.setUint8(o + 5, yearByte(h.to)); o += 6;
+  }
+  dv.setUint16(o, visits.length); o += 2;
+  for (const v of visits) {
+    dv.setUint32(o, v.cityId); dv.setUint8(o + 4, Math.max(0, Math.min(255, v.y - 1900))); dv.setUint8(o + 5, v.m || 0); o += 6;
+  }
+  const raw = new Uint8Array(dv.buffer);
   if (canCompress) return 'z' + toBase64Url(await pipe(raw, new CompressionStream('deflate-raw')));
   return 'r' + toBase64Url(raw);
 }
@@ -47,13 +55,26 @@ export async function decodeShare(str) {
   if (kind === 'z') bytes = await pipe(bytes, new DecompressionStream('deflate-raw'));
   else if (kind !== 'r') throw new Error('Unknown share format');
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (dv.getUint8(0) !== VERSION) throw new Error('Unsupported share version');
-  const home = dv.getUint32(1) || null;
-  const count = dv.getUint16(5);
+  const version = dv.getUint8(0);
+  const homes = [];
+  let o;
+  if (version === 1) {
+    const id = dv.getUint32(1);
+    if (id) homes.push({ id: 'h0', cityId: id, from: null, to: null });
+    o = 5;
+  } else if (version === 2) {
+    const n = dv.getUint8(1);
+    o = 2;
+    for (let i = 0; i < n; i++, o += 6) {
+      homes.push({ id: 'h' + i, cityId: dv.getUint32(o), from: byteYear(dv.getUint8(o + 4)), to: byteYear(dv.getUint8(o + 5)) });
+    }
+  } else {
+    throw new Error('Unsupported share version');
+  }
+  const count = dv.getUint16(o); o += 2;
   const visits = [];
-  for (let i = 0; i < count; i++) {
-    const o = 7 + i * 6;
+  for (let i = 0; i < count; i++, o += 6) {
     visits.push({ id: 's' + i, cityId: dv.getUint32(o), y: 1900 + dv.getUint8(o + 4), m: dv.getUint8(o + 5) });
   }
-  return { home, visits };
+  return { homes, visits };
 }
