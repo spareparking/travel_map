@@ -140,12 +140,15 @@
   <dialog id="shareDialog">
     <form method="dialog">
       <h2>Share your map</h2>
-      <p class="muted">Anyone with this link sees your map and stats (read-only). Your trips are stored inside the link itself, so share it with people you trust. It's a snapshot: add new trips later and you'll need a fresh link.</p>
-      <textarea id="shareUrl" readonly rows="4"></textarea>
+      <p class="muted" id="shareIntro"></p>
+      <textarea id="shareUrl" readonly rows="1"></textarea>
+      <p class="error" id="shareError" hidden></p>
       <div class="dialog-actions">
+        <button type="button" class="btn danger" id="stopShareBtn" hidden>Stop sharing</button>
         <span class="spacer"></span>
         <button type="button" class="btn" id="closeShareBtn">Close</button>
         <button type="button" class="btn primary" id="copyShareBtn">Copy link</button>
+        <button type="button" class="btn primary" id="createShareBtn" hidden>Create link</button>
       </div>
     </form>
   </dialog>

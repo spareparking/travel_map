@@ -1,6 +1,6 @@
 import { computeStats, CONTINENTS, MONTHS, formatWhen, formatYears, visitKey, distanceKm, WORLD_COUNTRIES } from './stats.js';
 import { encodeShare, decodeShare } from './share.js';
-import { initCloud } from './cloud.js';
+import { initCloud, readSharedMap } from './cloud.js';
 import { firebaseConfig } from './firebase-config.js';
 
 const STORAGE_KEY = 'travelmap.v1';
@@ -13,7 +13,7 @@ const fmtNum = (n) => Math.round(n).toLocaleString();
 let cities = [];          // [{id,name,admin,cc,lat,lon,pop,norm}]
 const cityById = new Map();
 let countries = {};       // cc -> [name, continent]
-let data = { homes: [], visits: [] }; // homes: {id, cityId, from, to}  visits: {id, cityId, y, m}
+let data = { homes: [], visits: [], shareId: null }; // homes: {id, cityId, from, to}  visits: {id, cityId, y, m}; shareId: live share link
 let readOnly = false;
 let filter = { from: null, to: null };
 let map, countryLayer, stateLayer, pinLayer, homeLayer, tempMarker;
@@ -31,7 +31,7 @@ function load() {
       const d = JSON.parse(raw);
       if (d && Array.isArray(d.visits)) {
         addPlaces(d.places);
-        data = { homes: migrateHomes(d), visits: d.visits };
+        data = { homes: migrateHomes(d), visits: d.visits, shareId: d.shareId || null };
       }
     }
   } catch { /* storage unavailable: start empty */ }
@@ -63,7 +63,8 @@ let cloudUser = null;  // {uid, email, name} when signed in
 let changeCount = 0;
 let pushTimer = null;
 
-const cloudPayload = () => ({ version: 2, homes: data.homes, visits: data.visits, places: usedPlaces() });
+const cloudPayload = () => ({ version: 2, homes: data.homes, visits: data.visits, places: usedPlaces(), shareId: data.shareId || null });
+const sharePayload = () => ({ version: 2, homes: data.homes, visits: data.visits, places: usedPlaces() });
 
 function schedulePush() {
   clearTimeout(pushTimer);
@@ -76,12 +77,17 @@ async function pushNow() {
   const at = changeCount;
   const ok = await cloud.push(cloudPayload());
   if (ok && at === changeCount) setDirty(false); // nothing changed while it was saving
+  // Keep the live share link showing the latest map
+  if (ok && data.shareId) {
+    try { await cloud.pushShare(data.shareId, sharePayload()); } catch (err) { console.error('Share link update failed', err); setCloudStatus('error'); }
+  }
+  return ok;
 }
 
 /** Use the cloud copy on this device. */
 function applyRemote(remote) {
   addPlaces(remote.places);
-  const next = { homes: Array.isArray(remote.homes) ? remote.homes : [], visits: Array.isArray(remote.visits) ? remote.visits : [] };
+  const next = { homes: Array.isArray(remote.homes) ? remote.homes : [], visits: Array.isArray(remote.visits) ? remote.visits : [], shareId: remote.shareId || null };
   const same = JSON.stringify(next) === JSON.stringify(data);
   data = next;
   writeLocal();
@@ -100,7 +106,7 @@ function mergeData(a, b) {
     const k = `${h.cityId}|${h.from}|${h.to}`;
     if (!homes.has(k)) homes.set(k, h);
   }
-  return { homes: [...homes.values()], visits: [...visits.values()] };
+  return { homes: [...homes.values()], visits: [...visits.values()], shareId: a.shareId || b.shareId || null };
 }
 
 function onRemote(remote, { first }) {
@@ -934,7 +940,7 @@ async function restoreBackup(file) {
         id: newId(), cityId: +h.cityId, from: Number.isInteger(h.from) ? h.from : null, to: Number.isInteger(h.to) ? h.to : null,
       }))
       : (d.home && cityById.has(+d.home.cityId) ? [{ id: newId(), cityId: +d.home.cityId, from: null, to: null }] : []);
-    data = { homes, visits };
+    data = { homes, visits, shareId: data.shareId || null };
     filter = { from: null, to: null };
     save();
     renderAll();
@@ -945,13 +951,81 @@ async function restoreBackup(file) {
   }
 }
 
+// ---------- Sharing ----------
+// Signed in: a short link (#m=ID) to a live, read-only copy of the map in the cloud.
+// Signed out: the older snapshot link with the trips packed into it (#s=...).
+const shareUrlFor = (id) => `${location.origin}${location.pathname}#m=${id}`;
+
+function newShareId() {
+  const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  const bytes = crypto.getRandomValues(new Uint8Array(10));
+  return [...bytes].map((b) => abc[b % abc.length]).join('');
+}
+
+function setShareView(mode, url = '') {
+  const text = {
+    live: "Anyone with this link sees your map and stats, read-only. It updates automatically as you add trips. <strong>Stop sharing</strong> turns the link off.",
+    create: 'Create a short link to your map. Anyone with it can see your map and stats (read-only), and it stays up to date as you add trips.',
+    snapshot: "Anyone with this link sees your map and stats (read-only). It's a snapshot with your trips packed inside, so it's long and won't show trips you add later. <strong>Sign in with Google</strong> (⋯ menu) for a short link that stays up to date.",
+  }[mode];
+  $('shareIntro').innerHTML = text;
+  $('shareUrl').value = url;
+  $('shareUrl').rows = mode === 'snapshot' ? 4 : 1;
+  $('shareUrl').hidden = mode === 'create';
+  $('copyShareBtn').hidden = mode === 'create';
+  $('createShareBtn').hidden = mode !== 'create';
+  $('stopShareBtn').hidden = mode !== 'live';
+  $('shareError').hidden = true;
+}
+function shareError(msg) { $('shareError').textContent = msg; $('shareError').hidden = false; }
+
 async function openShare() {
   if (!data.visits.length) { toast('Add some visits first.'); return; }
-  const code = await encodeShare(data, usedPlaces());
-  const url = `${location.origin}${location.pathname}#s=${code}`;
-  $('shareUrl').value = url;
+  if (cloud && cloudUser) {
+    setShareView(data.shareId ? 'live' : 'create', data.shareId ? shareUrlFor(data.shareId) : '');
+  } else {
+    setShareView('snapshot', `${location.origin}${location.pathname}#s=${await encodeShare(data, usedPlaces())}`);
+  }
   $('shareDialog').showModal();
-  $('shareUrl').select();
+  if (!$('shareUrl').hidden) $('shareUrl').select();
+}
+
+async function createShare() {
+  if (!navigator.onLine) { shareError("You're offline. Connect to the internet to create a link."); return; }
+  const id = newShareId();
+  $('createShareBtn').disabled = true;
+  $('createShareBtn').textContent = 'Creating…';
+  try {
+    await cloud.pushShare(id, sharePayload());
+    data.shareId = id;
+    save(); // remembers the link on all your devices
+    setShareView('live', shareUrlFor(id));
+    $('shareUrl').select();
+  } catch (err) {
+    console.error(err);
+    shareError(err && err.code === 'permission-denied'
+      ? "Firebase blocked the link. The database rules need the 'shares' section added (see the setup instructions)."
+      : "Couldn't create the link. Please try again.");
+  } finally {
+    $('createShareBtn').disabled = false;
+    $('createShareBtn').textContent = 'Create link';
+  }
+}
+
+async function stopShare() {
+  if (!data.shareId) return;
+  if (!confirm('Stop sharing? The link will stop working for anyone you sent it to. You can create a new link any time.')) return;
+  try {
+    await cloud.deleteShare(data.shareId);
+  } catch (err) {
+    console.error(err);
+    shareError("Couldn't turn the link off. Check your connection and try again.");
+    return;
+  }
+  data.shareId = null;
+  save();
+  $('shareDialog').close();
+  toast('Sharing turned off');
 }
 
 async function copyShare() {
@@ -991,6 +1065,8 @@ function wireUi() {
 
   $('closeShareBtn').addEventListener('click', () => $('shareDialog').close());
   $('copyShareBtn').addEventListener('click', copyShare);
+  $('createShareBtn').addEventListener('click', createShare);
+  $('stopShareBtn').addEventListener('click', stopShare);
   $('restoreInput').addEventListener('change', (e) => { if (e.target.files[0]) restoreBackup(e.target.files[0]); e.target.value = ''; });
 
   // Light-dismiss dialogs by clicking the backdrop
@@ -1075,17 +1151,33 @@ async function boot() {
   cities = cityRows.map(([id, name, admin, cc, lat, lon, pop]) => ({ id, name, admin, cc, lat, lon, pop, norm: norm(name) }));
   for (const c of cities) cityById.set(c.id, c);
 
+  const showShared = () => {
+    readOnly = true;
+    document.body.classList.add('readonly');
+    $('sharedBanner').hidden = false;
+    $('ownMapLink').href = location.pathname;
+    $('ownMapLink').addEventListener('click', (e) => { e.preventDefault(); location.href = location.pathname; });
+  };
+  const live = location.hash.match(/^#m=([A-Za-z0-9]{6,40})$/);
   const m = location.hash.match(/^#s=(.+)$/);
-  if (m) {
+  if (live) {
+    let shared = null, failed = false;
+    try { shared = await readSharedMap(firebaseConfig, live[1]); } catch (err) { console.error(err); failed = true; }
+    if (shared) {
+      addPlaces(shared.places);
+      data = { homes: Array.isArray(shared.homes) ? shared.homes : [], visits: Array.isArray(shared.visits) ? shared.visits : [], shareId: null };
+      showShared();
+    } else {
+      toast(failed ? "Couldn't load that shared map. Check your connection and try again." : 'That share link has been turned off. Showing your own map instead.');
+      history.replaceState(null, '', location.pathname);
+      load();
+    }
+  } else if (m) {
     try {
       const shared = await decodeShare(m[1]);
       addPlaces(shared.places);
-      data = { homes: shared.homes, visits: shared.visits };
-      readOnly = true;
-      document.body.classList.add('readonly');
-      $('sharedBanner').hidden = false;
-      $('ownMapLink').href = location.pathname;
-      $('ownMapLink').addEventListener('click', (e) => { e.preventDefault(); location.href = location.pathname; });
+      data = { homes: shared.homes, visits: shared.visits, shareId: null };
+      showShared();
     } catch {
       toast("That share link looks broken. Showing your own map instead.");
       history.replaceState(null, '', location.pathname);
