@@ -330,3 +330,7 @@ dialog form.home-form { flex: none; border-top: 1px solid var(--line); backgroun
 .popup-sub { margin-top: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
 .popup-sub + ul { margin-top: 2px; }
 .rank-note, .rank-empty { font-size: 12px; margin: 6px 0 0; }
+
+/* ---------- Share dialog ---------- */
+#shareError { margin: 10px 0 0; }
+#shareIntro strong { color: var(--ink-2); font-weight: 600; }

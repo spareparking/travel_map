@@ -1,5 +1,6 @@
 // Cloud save: Google sign-in (Firebase Auth) + one Firestore document per user at users/{uid}.
 // The app stays local-first; this module just mirrors the data to the cloud and reports changes back.
+// Share links: a public, read-only copy of the map at shares/{shareId}, kept up to date by its owner.
 
 const SDK = 'https://www.gstatic.com/firebasejs/10.14.1';
 
@@ -16,7 +17,7 @@ export async function initCloud(config, hooks) {
     import(`${SDK}/firebase-firestore.js`),
   ]);
   const { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut } = authMod;
-  const { getFirestore, doc, setDoc, onSnapshot, serverTimestamp } = fs;
+  const { getFirestore, doc, setDoc, deleteDoc, onSnapshot, serverTimestamp } = fs;
 
   const app = initializeApp(config);
   const auth = getAuth(app);
@@ -65,6 +66,15 @@ export async function initCloud(config, hooks) {
       }
     },
     signOut: () => signOut(auth),
+    /** Publish (or refresh) the public read-only copy behind a share link. Throws on failure. */
+    async pushShare(shareId, data) {
+      if (!user) throw Object.assign(new Error('Not signed in'), { code: 'unauthenticated' });
+      await setDoc(doc(db, 'shares', shareId), { ...data, owner: user.uid, app: 'travel-map', updatedAt: serverTimestamp() });
+    },
+    /** Turn a share link off. Throws on failure. */
+    async deleteShare(shareId) {
+      await deleteDoc(doc(db, 'shares', shareId));
+    },
     /** Save the whole data set to the cloud. Resolves once the server has it. */
     async push(data) {
       if (!user) return false;
@@ -83,4 +93,15 @@ export async function initCloud(config, hooks) {
       }
     },
   };
+}
+
+/** Read a shared map (no sign-in needed). Returns the data, or null if the link was turned off. */
+export async function readSharedMap(config, shareId) {
+  if (!config) throw new Error('Cloud not configured');
+  const [{ initializeApp }, { getFirestore, doc, getDoc }] = await Promise.all([
+    import(`${SDK}/firebase-app.js`),
+    import(`${SDK}/firebase-firestore.js`),
+  ]);
+  const snap = await getDoc(doc(getFirestore(initializeApp(config)), 'shares', shareId));
+  return snap.exists() ? snap.data() : null;
 }

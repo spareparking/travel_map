@@ -12,7 +12,7 @@ A lean, single-page web app for marking the cities you've visited (with month an
 - **Time filter:** limit the map and stats to a year or a range of years.
 - **Cloud save (Google sign-in):** trips are always saved in the browser, and when you sign in with Google they're also saved to your own Firestore document and kept in sync across devices. If a browser clears its data, sign in again and everything comes back. The first sign-in on a device that already has trips combines them with the cloud copy. Changes made offline are uploaded when you're back online.
 - **Backups:** **⋯ → Download backup** saves a file; **Restore from backup** loads one.
-- **Share:** **⋯ → Share my map** makes a read-only link with your trips encoded in it (no server involved).
+- **Share:** **⋯ → Share my map**. Signed in: a short link (`#m=…`) to a read-only copy of your map that updates as you add trips, with **Stop sharing** to turn it off. Signed out: a longer snapshot link with the trips packed into it (`#s=…`).
 
 ## Running it
 
@@ -64,10 +64,17 @@ service cloud.firestore {
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
+    match /shares/{shareId} {
+      allow get: if true;
+      allow create: if request.auth != null && request.resource.data.owner == request.auth.uid;
+      allow update: if request.auth != null && resource.data.owner == request.auth.uid
+                    && request.resource.data.owner == request.auth.uid;
+      allow delete: if request.auth != null && resource.data.owner == request.auth.uid;
+    }
   }
 }
 ```
 
 4. Register a Web app and paste its config into `js/firebase-config.js`.
 
-Each user's data lives in one document at `users/{uid}`.
+Each user's data lives in one document at `users/{uid}`. A share link (`#m=<id>`) points to a public, read-only copy at `shares/{id}` that its owner keeps up to date; anyone with the link can read it (`get` only, so shares can't be listed).
